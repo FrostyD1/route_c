@@ -286,16 +286,35 @@ NOISE_TYPES = ['clean', 'noise', 'bias', 'dropout']  # blur needs scipy
 # ============================================================================
 
 def pixel_to_bit_mask(pixel_mask: np.ndarray, n_bits: int, latent_size: int = 7) -> np.ndarray:
-    """Convert pixel mask to bit mask for latent grid."""
+    """Convert pixel mask to bit mask for latent grid.
+
+    A latent position is marked as masked if ANY pixel in its patch is occluded
+    (i.e. patch mean < 1.0, not < 0.5).  The old threshold of 0.5 caused stripes
+    (stripe_width=2, gap=6) to produce an all-zero bit_mask because every 4×4
+    patch had exactly 50% occlusion — the strict '<' missed them entirely.
+    """
     patch_size = 28 // latent_size
     bit_mask = np.zeros((n_bits, latent_size, latent_size), dtype=bool)
     for i in range(latent_size):
         for j in range(latent_size):
             y0, y1 = i * patch_size, (i + 1) * patch_size
             x0, x1 = j * patch_size, (j + 1) * patch_size
-            if pixel_mask[y0:y1, x0:x1].mean() < 0.5:
+            patch_visible_ratio = pixel_mask[y0:y1, x0:x1].mean()
+            # Mark as masked if any pixel in the patch is occluded
+            if patch_visible_ratio < 1.0 - 1e-6:
                 bit_mask[:, i, j] = True
     return bit_mask
+
+
+def compute_mask_ratio(pixel_mask: np.ndarray) -> float:
+    """Fraction of pixels that are occluded (mask=0)."""
+    return float(1.0 - pixel_mask.mean())
+
+
+def compute_bit_mask_ratio(bit_mask: np.ndarray) -> float:
+    """Fraction of latent positions that are masked."""
+    # bit_mask shape: (n_bits, H, W) — all bits at a position share the mask
+    return float(bit_mask[0].mean())
 
 
 def compute_occluded_mse(o_hat, o_orig, mask):
@@ -558,8 +577,14 @@ def _build_learned_energy(model, learned_drope, sigma_sq, cfg, device):
 # INPAINTING MODEL
 # ============================================================================
 
-def train_inpaint_model(model, train_x, cfg, device, train_y=None):
-    """Train amortized inpainting network with optional L_cls."""
+def train_inpaint_model(model, train_x, cfg, device, train_y=None,
+                        use_cls=True, use_energy=True):
+    """Train amortized inpainting network.
+
+    Args:
+        use_cls: If True (default), include L_cls in training loss.
+        use_energy: If True (default), include L_core + L_obs.
+    """
     from inpainting import InpaintTrainer, InpaintConfig
 
     icfg = InpaintConfig(
@@ -567,6 +592,9 @@ def train_inpaint_model(model, train_x, cfg, device, train_y=None):
         batch_size=cfg.batch_size,
         lr=cfg.inpaint_lr,
         hidden=cfg.inpaint_hidden,
+        alpha_core=0.1 if use_energy else 0.0,
+        alpha_obs=0.1 if use_energy else 0.0,
+        gamma_cls=0.5 if use_cls else 0.0,
     )
     trainer = InpaintTrainer(model, icfg, device)
     trainer.train(train_x, train_y=train_y, verbose=True)
@@ -579,7 +607,7 @@ def train_inpaint_model(model, train_x, cfg, device, train_y=None):
 
 def evaluate_sample(
     model, x_clean, label, pixel_mask, bit_mask, method, device, cfg,
-    energy_fn=None, solver=None, inpaint_net=None,
+    energy_fn=None, solver=None, inpaint_net=None, inpaint_net_maskonly=None,
 ):
     """Evaluate a single sample with a given method. Returns dict of metrics."""
     # Occlude image
@@ -604,6 +632,9 @@ def evaluate_sample(
     elif method == 'amortized':
         from inpainting import amortized_inpaint
         z_final = amortized_inpaint(inpaint_net, z_init, bit_mask, device)
+    elif method == 'amortized_maskonly':
+        from inpainting import amortized_inpaint
+        z_final = amortized_inpaint(inpaint_net_maskonly, z_init, bit_mask, device)
     elif method == 'iterative':
         from inpainting import iterative_inpaint
         z_final = iterative_inpaint(inpaint_net, z_init, bit_mask, n_steps=4, device=device)
@@ -635,7 +666,7 @@ def evaluate_sample(
 
 def run_evaluation(
     model, test_x, test_y, method, mask_type, noise_type, cfg, device,
-    energy_fn=None, solver=None, inpaint_net=None,
+    energy_fn=None, solver=None, inpaint_net=None, inpaint_net_maskonly=None,
 ):
     """Run evaluation for a specific (method, mask_type, noise_type) configuration."""
     model.eval()
@@ -646,7 +677,10 @@ def run_evaluation(
         'acc_before': 0, 'acc_after': 0,
         'mse_before': [], 'mse_after': [],
         'runtime_ms': [],
+        'correct_before': [], 'correct_after': [],  # per-sample for correlation
     }
+    pixel_mask_ratio = None
+    bit_mask_ratio = None
 
     for idx in eval_idx:
         x_clean = test_x[idx].numpy()[0]
@@ -669,19 +703,51 @@ def run_evaluation(
 
         bit_mask = pixel_to_bit_mask(pixel_mask, cfg.n_bits, cfg.latent_size)
 
+        # ── Sanity checks (computed once per config) ──
+        if pixel_mask_ratio is None:
+            pixel_mask_ratio = compute_mask_ratio(pixel_mask)
+            bit_mask_ratio = compute_bit_mask_ratio(bit_mask)
+            assert pixel_mask_ratio > 0, (
+                f"SANITY FAIL: pixel_mask_ratio=0 for mask_type={mask_type}. "
+                f"Mask is all-visible — occlusion not applied."
+            )
+            assert bit_mask_ratio > 0, (
+                f"SANITY FAIL: bit_mask_ratio=0 for mask_type={mask_type}. "
+                f"No latent positions are masked — inference will be a no-op. "
+                f"Check pixel_to_bit_mask threshold."
+            )
+
         res = evaluate_sample(
             model, x_noisy, label, pixel_mask, bit_mask,
             method, device, cfg,
             energy_fn=energy_fn, solver=solver, inpaint_net=inpaint_net,
+            inpaint_net_maskonly=inpaint_net_maskonly,
         )
 
         results['acc_before'] += res['correct_before']
         results['acc_after'] += res['correct_after']
+        results['correct_before'].append(res['correct_before'])
+        results['correct_after'].append(res['correct_after'])
         results['mse_before'].append(res['mse_before'])
         results['mse_after'].append(res['mse_after'])
         results['runtime_ms'].append(res['runtime_ms'])
 
     n = len(eval_idx)
+
+    # Per-sample Δmse and Δacc for correlation analysis
+    mse_before_arr = np.array(results['mse_before'])
+    mse_after_arr = np.array(results['mse_after'])
+    correct_before_arr = np.array(results['correct_before'])
+    correct_after_arr = np.array(results['correct_after'])
+    delta_mse_per_sample = mse_after_arr - mse_before_arr
+    delta_acc_per_sample = correct_after_arr - correct_before_arr
+
+    # corr(Δmse, Δacc) — quantifies objective misalignment
+    if np.std(delta_mse_per_sample) > 1e-12 and np.std(delta_acc_per_sample) > 1e-12:
+        corr_mse_acc = float(np.corrcoef(delta_mse_per_sample, delta_acc_per_sample)[0, 1])
+    else:
+        corr_mse_acc = 0.0
+
     return {
         'method': method,
         'mask_type': mask_type,
@@ -689,11 +755,20 @@ def run_evaluation(
         'acc_before': results['acc_before'] / n,
         'acc_after': results['acc_after'] / n,
         'delta_acc': (results['acc_after'] - results['acc_before']) / n,
-        'mse_before': np.mean(results['mse_before']),
-        'mse_after': np.mean(results['mse_after']),
-        'delta_mse': np.mean(results['mse_after']) - np.mean(results['mse_before']),
+        'mse_before': np.mean(mse_before_arr),
+        'mse_after': np.mean(mse_after_arr),
+        'delta_mse': np.mean(delta_mse_per_sample),
         'runtime_ms': np.mean(results['runtime_ms']),
         'n_samples': n,
+        # ── Hard metrics (reviewer feedback) ──
+        'pixel_mask_ratio': pixel_mask_ratio,
+        'bit_mask_ratio': bit_mask_ratio,
+        'corr_dmse_dacc': corr_mse_acc,
+        'mse_before_abs': float(np.mean(mse_before_arr)),
+        'mse_after_abs': float(np.mean(mse_after_arr)),
+        'runtime_p10': float(np.percentile(results['runtime_ms'], 10)),
+        'runtime_p50': float(np.percentile(results['runtime_ms'], 50)),
+        'runtime_p90': float(np.percentile(results['runtime_ms'], 90)),
     }
 
 
@@ -708,7 +783,8 @@ def count_params(model):
 def main():
     parser = argparse.ArgumentParser(description='Route C Benchmark Suite')
     parser.add_argument('--model', type=str, default='all',
-                        choices=['all', 'baseline', 'drope', 'learned_drope', 'amortized', 'iterative'])
+                        choices=['all', 'baseline', 'drope', 'learned_drope',
+                                 'amortized', 'amortized_maskonly', 'iterative'])
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--eval_samples', type=int, default=200)
@@ -728,7 +804,8 @@ def main():
     noise_types = args.noise_types.split(',')
 
     if args.model == 'all':
-        methods = ['baseline', 'drope', 'learned_drope', 'amortized', 'iterative']
+        methods = ['baseline', 'drope', 'learned_drope',
+                   'amortized', 'amortized_maskonly', 'iterative']
     else:
         methods = [args.model]
 
@@ -783,10 +860,19 @@ def main():
         )
         solvers['learned_drope'] = MCMCSolver(energy_fns['learned_drope'], cfg.block_size, device)
 
+    inpaint_net_maskonly = None
+
     if 'amortized' in methods or 'iterative' in methods:
-        print("\n[3c] Training inpainting network...")
-        inpaint_net = train_inpaint_model(model, train_x, cfg, device)
-        print(f"    InpaintNet parameters: {count_params(inpaint_net):,}")
+        print("\n[3c] Training inpainting network (L_mask + L_cls + L_core + L_obs)...")
+        inpaint_net = train_inpaint_model(model, train_x, cfg, device,
+                                          train_y=train_y, use_cls=True, use_energy=True)
+        print(f"    InpaintNet (full) parameters: {count_params(inpaint_net):,}")
+
+    if 'amortized_maskonly' in methods:
+        print("\n[3d] Training inpainting network (L_mask ONLY — ablation baseline)...")
+        inpaint_net_maskonly = train_inpaint_model(model, train_x, cfg, device,
+                                                    train_y=None, use_cls=False, use_energy=False)
+        print(f"    InpaintNet (mask-only) parameters: {count_params(inpaint_net_maskonly):,}")
 
     # Run evaluations
     print("\n[4] Running evaluations...")
@@ -811,15 +897,18 @@ def main():
                     energy_fn=energy_fns.get(method),
                     solver=solvers.get(method),
                     inpaint_net=inpaint_net,
+                    inpaint_net_maskonly=inpaint_net_maskonly,
                 )
                 all_results.append(res)
 
                 print(f"    acc: {res['acc_before']:.1%} → {res['acc_after']:.1%} "
                       f"(Δ={res['delta_acc']:+.1%}) | "
                       f"mse: {res['mse_before']:.4f} → {res['mse_after']:.4f} | "
-                      f"time: {res['runtime_ms']:.1f}ms")
+                      f"time: {res['runtime_ms']:.1f}ms | "
+                      f"mask_ratio: px={res['pixel_mask_ratio']:.2f} bit={res['bit_mask_ratio']:.2f} | "
+                      f"corr(Δmse,Δacc)={res['corr_dmse_dacc']:+.3f}")
 
-    # Save CSV
+    # Save CSV with extended columns (reviewer hard metrics)
     csv_path = os.path.join(cfg.output_dir, "results.csv")
     with open(csv_path, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=[
@@ -827,26 +916,52 @@ def main():
             'acc_before', 'acc_after', 'delta_acc',
             'mse_before', 'mse_after', 'delta_mse',
             'runtime_ms', 'n_samples',
+            'pixel_mask_ratio', 'bit_mask_ratio',
+            'corr_dmse_dacc',
+            'mse_before_abs', 'mse_after_abs',
+            'runtime_p10', 'runtime_p50', 'runtime_p90',
         ])
         writer.writeheader()
         for r in all_results:
             writer.writerow(r)
     print(f"\nCSV saved to {csv_path}")
 
+    # Hardware / environment info header
+    import platform
+    hw_device = str(device)
+    hw_info = {
+        'device': hw_device,
+        'platform': platform.platform(),
+        'python': platform.python_version(),
+        'torch': torch.__version__,
+        'batch_size': 1,  # evaluation is per-sample
+    }
+    if hw_device.startswith('cuda') and torch.cuda.is_available():
+        hw_info['gpu'] = torch.cuda.get_device_name(0)
+        hw_info['gpu_mem_gb'] = f"{torch.cuda.get_device_properties(0).total_mem / 1e9:.1f}"
+    hw_path = os.path.join(cfg.output_dir, "hardware_info.txt")
+    with open(hw_path, 'w') as f:
+        for k, v in hw_info.items():
+            f.write(f"{k}: {v}\n")
+    print(f"Hardware info saved to {hw_path}")
+
     # Pretty print summary tables
     print("\n" + "=" * 120)
     print("SUMMARY TABLE: All Methods × Mask Types (clean noise only)")
     print("=" * 120)
 
-    header = f"{'method':<15} {'mask':<12} {'noise':<10} {'acc_before':>10} {'acc_after':>10} {'Δacc':>8} {'mse_before':>10} {'mse_after':>10} {'Δmse':>8} {'ms/sample':>10}"
+    header = (f"{'method':<18} {'mask':<12} {'noise':<10} {'acc_bef':>8} {'acc_aft':>8} "
+              f"{'Δacc':>7} {'mse_bef':>8} {'mse_aft':>8} {'Δmse':>8} "
+              f"{'ms':>7} {'px_mask':>7} {'bit_mask':>8} {'corr':>6}")
     print(header)
-    print("-" * 120)
+    print("-" * 140)
 
     for r in all_results:
-        print(f"{r['method']:<15} {r['mask_type']:<12} {r['noise_type']:<10} "
-              f"{r['acc_before']:>10.1%} {r['acc_after']:>10.1%} {r['delta_acc']:>+8.1%} "
-              f"{r['mse_before']:>10.4f} {r['mse_after']:>10.4f} {r['delta_mse']:>+8.4f} "
-              f"{r['runtime_ms']:>10.1f}")
+        print(f"{r['method']:<18} {r['mask_type']:<12} {r['noise_type']:<10} "
+              f"{r['acc_before']:>8.1%} {r['acc_after']:>8.1%} {r['delta_acc']:>+7.1%} "
+              f"{r['mse_before']:>8.4f} {r['mse_after']:>8.4f} {r['delta_mse']:>+8.4f} "
+              f"{r['runtime_ms']:>7.1f} {r['pixel_mask_ratio']:>7.2f} {r['bit_mask_ratio']:>8.2f} "
+              f"{r['corr_dmse_dacc']:>+6.2f}")
 
     # OOD analysis
     print("\n" + "=" * 120)
@@ -887,7 +1002,57 @@ def main():
     if learned_drope is not None:
         print(f"  Learned gate:       {count_params(learned_drope):,} params")
     if inpaint_net is not None:
-        print(f"  InpaintNet:         {count_params(inpaint_net):,} params")
+        print(f"  InpaintNet (full):  {count_params(inpaint_net):,} params")
+    if inpaint_net_maskonly is not None:
+        print(f"  InpaintNet (mask):  {count_params(inpaint_net_maskonly):,} params")
+
+    # ── Mask ratio summary (sanity check visibility) ──
+    print("\n" + "=" * 120)
+    print("MASK RATIO SUMMARY (sanity check)")
+    print("=" * 120)
+    seen_masks = set()
+    for r in all_results:
+        mt = r['mask_type']
+        if mt not in seen_masks:
+            seen_masks.add(mt)
+            print(f"  {mt:<12}: pixel_mask_ratio={r['pixel_mask_ratio']:.3f}, "
+                  f"bit_mask_ratio={r['bit_mask_ratio']:.3f}")
+
+    # ── Iterative steps curve (acc_after vs n_steps = 1,2,3,4) ──
+    if inpaint_net is not None:
+        print("\n" + "=" * 120)
+        print("ITERATIVE STEPS CURVE: acc_after vs n_steps (center mask, clean noise)")
+        print("=" * 120)
+
+        from inpainting import iterative_inpaint
+        steps_csv_rows = []
+        for n_steps in [1, 2, 3, 4]:
+            rng_steps = np.random.default_rng(cfg.seed + 200)
+            eval_idx = rng_steps.choice(len(test_x), min(cfg.eval_samples, len(test_x)), replace=False)
+            correct = 0
+            for idx_s in eval_idx:
+                x_c = test_x[idx_s].numpy()[0]
+                lbl = test_y[idx_s].item()
+                pm = make_center_mask(28, 28)
+                bm = pixel_to_bit_mask(pm, cfg.n_bits, cfg.latent_size)
+                x_occ = x_c * pm
+                with torch.no_grad():
+                    x_t = torch.from_numpy(x_occ[None, None].astype(np.float32)).to(device)
+                    z_i = model.encode(x_t)[0]
+                    z_f = iterative_inpaint(inpaint_net, z_i, bm, n_steps=n_steps, device=device)
+                    pred = model.classifier(z_f.unsqueeze(0)).argmax(1).item()
+                    correct += int(pred == lbl)
+            acc = correct / len(eval_idx)
+            print(f"  n_steps={n_steps}: acc_after={acc:.1%}")
+            steps_csv_rows.append({'n_steps': n_steps, 'acc_after': acc})
+
+        steps_csv_path = os.path.join(cfg.output_dir, "iterative_steps_curve.csv")
+        with open(steps_csv_path, 'w', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=['n_steps', 'acc_after'])
+            w.writeheader()
+            for row in steps_csv_rows:
+                w.writerow(row)
+        print(f"  Steps curve saved to {steps_csv_path}")
 
     print("\n" + "=" * 120)
     print(f"All results saved to {csv_path}")

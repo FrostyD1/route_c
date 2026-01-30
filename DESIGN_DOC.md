@@ -1,6 +1,72 @@
 # Route C: Learned Discrete Routing + Amortized Inpainting — Design Document
 
-**Version 2 — incorporates reviewer feedback (2026-01-30)**
+**Version 2.1 — incorporates reviewer feedback round 2 (2026-01-30)**
+
+## 0. Representation Contract
+
+All modules share these interfaces. This section is the **ground truth** for what `z`, `encode`, `decode`, and energy terms mean.
+
+### Latent representation
+
+```
+z ∈ {0,1}^{k × H × W}    where k=8, H=W=7
+```
+Total: 392 binary bits per image. Each spatial position (i,j) holds a k-bit token.
+
+### Encoder: `encode(x) → z`
+
+```
+x ∈ R^{1×28×28}  (normalized MNIST image, [0,1])
+    → BinaryEncoder (CNN: Conv(stride=2)→Conv(stride=2)→Conv → logits ∈ R^{k×7×7})
+    → GumbelSigmoid (forward: hard {0,1} via STE; backward: soft sigmoid)
+    → z ∈ {0,1}^{k×7×7}
+```
+Ref: Bengio et al. 2013 (STE), Hubara et al. 2016 (saturated STE with `1{|a|≤1}`).
+
+### Decoder: `decode(z) → x̂`
+
+```
+z ∈ {0,1}^{k×7×7}
+    → BinaryDecoder (Transposed CNN: 7→14→28)
+    → x̂ ∈ [0,1]^{1×28×28}   (sigmoid output)
+```
+
+### E_obs: Observation energy
+
+```
+E_obs(z, x_obs, mask) = (1 / 2σ²) · ||mask ⊙ (decode(z) - x_obs)||²
+```
+This is pixel-MSE weighted by observation mask. **Known limitation:** implicitly assumes Gaussian observation noise. For binarized MNIST, the correct likelihood is **Bernoulli** (Kingma & Welling, 2014):
+```
+E_obs_bernoulli(z, x) = -Σ_i [x_i·log(μ_i) + (1-x_i)·log(1-μ_i)]    where μ = decode(z)
+```
+See §9.2 for planned migration to Bernoulli E_obs. (Ref: Loaiza-Ganem & Cunningham, NeurIPS 2019 — "The Continuous Bernoulli" for [0,1]-valued data.)
+
+### E_core: Local structure energy
+
+```
+E_core(z) = -Σ_{i,j} log p_θ(z_{:,i,j} | neigh(z)_{i,j})
+```
+where `neigh` = 3×3 spatial window (9k-1 = 71 context features), and `p_θ` is a small MLP (`Linear(71,32)→ReLU→Linear(32,8)`). E_core is the negative log-likelihood of each token under its local neighborhood — a discrete analog of an MRF prior.
+
+### Classifier: `classifier(z) → logits`
+
+```
+z.reshape(B, k*H*W) → Linear(392, 10) → logits ∈ R^{10}
+```
+Frozen during InpaintNet training; its gradient provides the L_cls signal.
+
+### Summary table
+
+| Interface | Input | Output | Implementation |
+|-----------|-------|--------|----------------|
+| `encode(x)` | (1,28,28) float | (8,7,7) binary | `learning/quantizer.py:BinaryEncoder` + `GumbelSigmoid` |
+| `decode(z)` | (8,7,7) binary | (1,28,28) float | `learning/quantizer.py:BinaryDecoder` |
+| `E_obs(z,x,m)` | z + observed x + mask | scalar | `inference/energy.py:ObservationEnergy` |
+| `E_core(z)` | z | scalar | `core/local_energy.py:LocalBitPredictor.energy()` |
+| `classifier(z)` | z flat (392,) | (10,) logits | `learning/__init__.py:LogOddsClassifier` |
+
+---
 
 ## 1. Problem Diagnosis: Why Fixed XOR/Hamming Gates Are Insufficient
 
@@ -18,6 +84,12 @@
 3. **Test-time MCMC is slow and fragile.** 20-30 sweeps of block Gibbs per sample at ~2-5s/sample is impractical. MaskGIT (Chang et al., 2022) showed that amortized parallel decoding (8-12 steps) replaces sequential MCMC.
 
 4. **D-RoPE is NOT a universal improvement — it is a strong prior without evidence gating.** The data directly shows: sweeps_95% increases (22/23 vs 20), not decreases. D-RoPE changes the energy landscape and proposal distribution, which sometimes aligns with the task (random occlusion: periphery provides useful long-range signal) and sometimes introduces hallucination (center occlusion: distant tokens may route incorrect structure into the missing core). **The XOR gate has no mechanism to suppress bad matches — it treats all low-Hamming pairs equally regardless of semantic relevance.**
+
+**Hardened findings from mid-term benchmark (§8):**
+
+- **噪声下 MCMC：Δmse 往往仍下降，但 Δacc 会变负。** Pixel-MSE type E_obs is NOT a valid proxy for task-consistent inference. When observation is noisy, MCMC pushes z toward a "smooth average" that lowers pixel MSE but destroys discriminative structure. This is a fundamental objective misalignment, not a hyperparameter issue. (Ref: Stuhr et al. 2022, "Don't Miss the Mismatch" — reconstruction vs. classification objectives can diverge by 25–59% on downstream tasks.)
+
+- **D-RoPE 2× 慢且不增益。** Fixed Hamming gate should be treated as a "candidate generation / structural prior" module, NOT an effective energy term. Either it must become learned (Route A: weighted Hamming), or it should be removed from the energy and used only as a candidate set for Route A+B integration.
 
 ## 2. Literature Alignment
 
@@ -292,6 +364,12 @@ LearnedDiscreteAttention(z, w, τ):
 ```
 Hardware path: XOR → weighted popcount → top-K compare → majority vote. No floating-point multiply.
 
+**Training/deployment are the same operator, two implementations:**
+- **Training (soft):** `v_j = Σ_{i∈C(j)} g_{ij} · z_i / Σ_{i∈C(j)} g_{ij}` — differentiable weighted average, gradients flow through `g` and (via STE) through `z`.
+- **Deployment (hard):** `v_j = majority_vote(z_{top-K})` where top-K selected by hard gate `1[g > 0.5]` — integer-only, no FP multiply.
+
+This is analogous to how attention in Transformers uses softmax during training but can be approximated by top-K sparse attention at inference (Correia et al., 2019). The soft→hard transition is controlled by temperature annealing (T: 1.0 → 0.1).
+
 ### §4: Route A training objective — task-supervised, not just contrastive
 Current: Contrastive energy ranking (E(z_clean) < E(z_corrupt)).
 **Improvement:** Add task-supervision — backpropagate L_cls through the gate weights w:
@@ -340,10 +418,12 @@ drope     | center     | noise | 25% → 24%          | -1.0% | -0.009  | 891
 drope     | random     | clean | 48% → 54%          | +6.0% | -0.010  | 743
 ```
 
+> **⚠️ ERRATA (v2.1):** The stripes rows above (Δacc=0, Δmse=0) were caused by a **confirmed implementation bug** in `pixel_to_bit_mask()`. The function used `patch.mean() < 0.5` (strict less-than) to decide if a latent position should be masked. With `stripe_width=2` and `gap=6`, every 4×4 latent patch has exactly 2/4 rows occluded → `mean = 0.5` → no latent positions were masked → inference was a no-op. **Fixed** in v2.1 by changing threshold to `< 1.0 - ε` (any partial occlusion marks the position). Results pending re-run.
+
 ### Key Findings
 
 **Finding 1: Mask geometry determines marginal value of inference.**
-- random (+7%) >> center (+3%) >> multi_hole (+1%) >> stripes (0%)
+- random (+7%) >> center (+3%) >> multi_hole (+1%) >> stripes (~~0%~~ BUG — pending re-run)
 - Multi-hole before accuracy is already 83% — small holes don't destroy discriminative structure
 - This means evaluation should focus on center/random/stripes (harder) for Route B validation
 
@@ -351,6 +431,7 @@ drope     | random     | clean | 48% → 54%          | +6.0% | -0.010  | 743
 - center+noise: MSE improves (-0.009) but acc drops (-1%)
 - This is NOT a hyperparameter issue — it's a fundamental mismatch: E_obs (pixel MSE) pushes z toward "smooth average" which lowers MSE but destroys discriminative features
 - **Critical implication:** Route B MUST include L_cls or a semantic observation term, not just pixel MSE
+- **Quantification (v2.1):** benchmark now reports per-config `corr(Δmse, Δacc)` to make this misalignment visible as a number, not just a narrative claim
 
 **Finding 3: D-RoPE confirms exp09 pattern.**
 - center: Δacc = -1% (worse than baseline +3%)
@@ -361,9 +442,60 @@ drope     | random     | clean | 48% → 54%          | +6.0% | -0.010  | 743
 **Finding 4: Speed baseline established.**
 - MCMC: 78-891 ms/sample depending on mask size and method
 - Route B target: <50ms (10-100× improvement)
+- **v2.1:** latency now reported with hardware info (`outputs/benchmark/hardware_info.txt`), P10/P50/P90 percentiles, batch=1 per-sample
 
 ### Actionable Next Steps (from mid-term analysis)
-1. ✅ **L_cls in InpaintNet** — already implemented, re-run needed
-2. **Discrete observation likelihood** — replace pixel MSE with token/histogram likelihood for E_obs (more Route C native, resistant to pixel-level noise)
-3. **Diagnostic metrics** — per-sample corr(Δmse, Δacc) to quantify objective misalignment
-4. **Center/stripes as primary benchmark** — multi_hole too easy (83% before)
+1. ✅ **L_cls in InpaintNet** — implemented; `amortized` = full loss, `amortized_maskonly` = L_mask only ablation
+2. **Discrete observation likelihood** — replace pixel MSE with Bernoulli likelihood for E_obs (see §0 and §9.2)
+3. ✅ **Diagnostic metrics** — `corr(Δmse, Δacc)`, `mask_ratio`, `mse_before_abs`, percentile runtimes all added to CSV
+4. **Center/stripes as primary benchmark** — multi_hole too easy; stripes now valid after bug fix
+5. ✅ **Iterative steps curve** — `acc_after` at n_steps=1,2,3,4 saved to `iterative_steps_curve.csv`
+
+## 9. Hard Metrics & Sanity Checks (v2.1)
+
+These metrics were added to prevent false conclusions from implementation artifacts.
+
+### 9.1 Per-config sanity checks (assert on every evaluation run)
+
+| Check | Assert condition | What it catches |
+|-------|-----------------|-----------------|
+| `pixel_mask_ratio > 0` | Mask must occlude some pixels | Mask generator returning all-ones |
+| `bit_mask_ratio > 0` | Latent mask must mark some positions | pixel→bit threshold too strict (stripes bug) |
+| `mse_before > 0` | MSE must be positive before inference | decode or MSE computation not running |
+
+### 9.2 Extended CSV columns (outputs/benchmark/results.csv)
+
+| Column | Definition | Why it matters |
+|--------|-----------|----------------|
+| `pixel_mask_ratio` | Fraction of pixels occluded | Confirms mask is applied; enables cross-mask comparison |
+| `bit_mask_ratio` | Fraction of latent positions masked | Direct input to MCMC/InpaintNet scope |
+| `corr_dmse_dacc` | Pearson(Δmse, Δacc) per sample | Quantifies objective misalignment (should be positive if MSE is a good proxy) |
+| `mse_before_abs` / `mse_after_abs` | Absolute MSE values | Confirms computation is non-trivial |
+| `runtime_p10/p50/p90` | Latency percentiles | Reveals tail latency; prevents P90 outlier from hiding behind mean |
+
+### 9.3 Planned: Bernoulli E_obs (replacing pixel MSE)
+
+Current `E_obs = ||decode(z) - x||²` assumes Gaussian observations. For MNIST (binary/near-binary pixels), the correct energy is:
+```
+E_obs_bernoulli(z, x) = -Σ_i [x_i · log(decode(z)_i) + (1-x_i) · log(1 - decode(z)_i)]
+```
+This is BCE, not MSE. The decoder already outputs sigmoid values in [0,1], so this is a drop-in replacement. Expected effect: noisy inputs should no longer cause "MSE↓ but acc↓" because BCE penalizes confident-wrong predictions more than MSE does.
+
+**Priority:** This should be implemented **before** training Route A's learned gate, to avoid learning `w` on a misaligned E_obs.
+
+### 9.4 L_mask vs L_mask+L_cls comparison matrix
+
+The benchmark now runs both:
+- `amortized` = InpaintNet trained with `L_mask + L_core + L_obs + L_cls` (full loss)
+- `amortized_maskonly` = InpaintNet trained with `L_mask` only (ablation)
+
+**Key comparison:** On noisy configs, `amortized` should show Δacc > 0 where `amortized_maskonly` shows Δacc ≤ 0. If this does NOT happen, the "L_cls fixes misalignment" narrative is invalidated and we need to investigate further.
+
+### 9.5 Hardware & environment reporting
+
+All benchmark runs output `outputs/benchmark/hardware_info.txt` with:
+- Device (CPU/GPU), GPU model, memory
+- PyTorch version, platform
+- Batch size (always 1 for per-sample evaluation)
+
+The `<50ms` KPI in §3 is meaningless without specifying hardware. All reported latencies are per-sample (batch=1) on the device recorded in this file.
