@@ -92,6 +92,9 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 16 | **INT4 量化可行，QAT 最优** | INT4 PTQ probe +1.4%, QAT Δacc +31% | 范式五：硬件化现实路径 |
 | 17 | **Gabor/DCT bank > Sobel/LoG** | probe 55.6% vs 39.8%，但仍不足 | 范式五：固定滤波器需更多基 |
 | 18 | **OperatorSelector 正确保守** | 7×7 全选 local，与 FGO 触发条件一致 | 范式架构：条件调度 |
+| 19 | **Feature Translator 需更多位宽** | 256ch→8bit cosine=0.50, 信息瓶颈太严重 | 逆映射：Q/R 容量不足 |
+| 20 | **z 是稳定协议（cycle contract）** | Hamming(z,ẑ)=1.4%, 5-cycle drift<2.8% | 范式核心：协议可逆 |
+| 21 | **Repair 提升 cycle 稳定性** | 遮挡后 Hamming 1.87%→1.57%, gain=+0.003 | 范式四：repair 增强协议 |
 
 ## 五大计算范式
 
@@ -333,6 +336,44 @@ Stripes 从 -22% → -1%。z-space 观测协议在 2×2 patch 分辨率下可行
 7×7 下 selector 正确全选 local（grid<14）。FGO 在 center/multi_hole 有 gap，但小 grid 不可靠。
 **OperatorSelector 的价值在大 grid：** 在 28×28 + distributed mask 时才触发 FGO（见 Phase 2）。
 
+### Phase 10: Feature Translator (exp_phase10_feature_translator.py)
+
+| bits | cosine(h,ĥ) | agreement | KL_div | Q params | R params |
+|------|-------------|-----------|--------|----------|----------|
+| 8 | 0.497 | 10.3% | 2.32 | 33,928 | 34,176 |
+| 4 | 0.510 | 12.7% | 1.65 | 33,412 | 33,664 |
+| 2 | 0.501 | 9.0% | 2.12 | 33,154 | 33,408 |
+
+**全部 DEGRADED。** 原因：ResNet18 layer3 = 256 通道 → 8/4/2 bits 压缩比太极端（256:8=32×）。
+Q/R 用 1×1 conv 太简单，无法学会 256 维连续空间到 8 bit 离散的映射。
+**修复方向：** 更多位宽(k=32/64)，或取更浅层特征(layer1=64ch)，或更深的 Q/R 网络(3×3 conv)。
+
+### Phase 11: Feature Repairability (exp_phase11_repairability.py)
+
+| corruption | agree_no_repair | agree_repaired | cosine_no_rep | cosine_repair | gain |
+|-----------|----------------|---------------|---------------|---------------|------|
+| center | 14.0% | 16.3% | 0.459 | 0.465 | +2.3% |
+| block | 13.7% | 15.3% | 0.460 | 0.464 | +1.7% |
+| channels | 15.3% | 10.3% | 0.463 | 0.467 | -5.0% |
+
+受 Phase 10 translator 瓶颈影响，基线 agreement 仅 ~14%。Repair 在 spatial corruption 上有微弱增益。
+**需在 Phase 10 translator 改进后重新测试。**
+
+### Phase 12: Cycle Contract (exp_phase12_cycle_contract.py)
+
+| Test | Result |
+|------|--------|
+| **Clean cycle Hamming(z,ẑ)** | **1.38%** (5.4/392 bits flip) → **STABLE** |
+| Occluded no repair | 1.87% |
+| Occluded repaired | 1.57% → **Repair IMPROVES stability** |
+| 1-cycle drift | 1.48% |
+| 2-cycle drift | 2.16% (+0.67%) |
+| 3-cycle drift | 2.51% (+1.03%) |
+| 5-cycle drift | 2.81% (+1.32%) → **STABLE (drift < 2× single)** |
+
+**z 是稳定协议。** 单次 cycle 仅 1.38% bit flip，5 次 cycle 后仍 < 3%。
+Repair 让 cycle 更稳定（1.87% → 1.57%）。多轮 cycle 漂移线性增长而非指数，协议不发散。
+
 ## 范式契约（已固化）
 
 ```json
@@ -361,7 +402,7 @@ Stripes 从 -22% → -1%。z-space 观测协议在 2×2 patch 分辨率下可行
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：Phase 9 ✅ → 准备 Phase 10+ (逆映射 bridge)
+### 当前执行阶段：Phase 12 ✅ → 逆映射 bridge 完成（Phase 10 需迭代）
 
 ---
 
@@ -525,7 +566,10 @@ route_c/
 │   ├── exp_phase6_constraints.py # Phase 6: D4 约束接口（已完成）
 │   ├── exp_phase7_hires_protocol.py # Phase 7: 高分辨率协议观测（已完成）
 │   ├── exp_phase8_int4_quant.py  # Phase 8: INT4 量化 + Gabor/DCT（已完成）
-│   └── exp_phase9_operator_selector.py # Phase 9: 条件算子调度（已完成）
+│   ├── exp_phase9_operator_selector.py # Phase 9: 条件算子调度（已完成）
+│   ├── exp_phase10_feature_translator.py # Phase 10: Feature Translator（需迭代）
+│   ├── exp_phase11_repairability.py  # Phase 11: 特征修复（依赖 Phase 10）
+│   └── exp_phase12_cycle_contract.py # Phase 12: Cycle Contract（已完成 ✅）
 ├── PARADIGM_REPORT.md          # 范式研究报告（文献+benchmark+实验矩阵）
 ├── DESIGN_DOC.md               # 设计文档 v2.1
 └── CLAUDE.md                   # 本文件
