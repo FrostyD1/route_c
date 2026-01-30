@@ -84,6 +84,10 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 8 | **跨数据集泛化成立** | MNIST/FMNIST/KMNIST 全部 center Δacc > 0，零架构改动 | 范式通用性 |
 | 9 | **Scale-up 有效，GDA 无增益** | 14×14 Δacc=+39% (vs 7×7 +25%)，GDA gap=0% | 范式五需重新定位 |
 | 10 | **E_obs 驱动修复 >> E_core 驱动** | evidence_fixed total=+13.0% vs adaptive_pp +0.0% | 范式四：观测几何决定修复 |
+| 11 | **Evidence repair 跨数据集 Pareto** | MNIST/FMNIST/KMNIST 9/9 configs Pareto PASS | 范式四：通用修复策略 |
+| 12 | **像素 E_obs 优于 token/freq** | pixel total=+7%, token=-2%, freq=-2% | 范式四：像素空间信息最丰富 |
+| 13 | **INT8 量化可行** | probe drop 0.4%, Δacc 反升 +7% | 范式五：离散化路径存在 |
+| 14 | **D4 约束接口有效但有限** | acc_var 降低 3%, viol_var 最低 | 范式六：约束 API 可行 |
 
 ## 五大计算范式
 
@@ -224,6 +228,62 @@ random_sparse@7×7 = -59%（灾难性）：bit_mask 标记所有位置为 masked
 触发三要素：大 grid (≥28×28) + 分布式遮挡 + 足够证据密度。
 contiguous 远程（two_block, missing_quadrant）不触发 — local propagation 足够。
 
+### Phase 3: Evidence Repair 模块化 (exp_phase3_evidence_module.py)
+
+跨数据集 × 3 mask × 2 policy（any vs evidence_fixed th=1.0）：
+
+| Dataset | Policy | center Δacc | stripes Δacc | multi_hole Δacc | **total** | Pareto |
+|---------|--------|------------|-------------|----------------|-----------|--------|
+| MNIST | any | +9% | -14% | -5% | -10% | — |
+| MNIST | evidence | +8% | +0% | +0% | **+8%** | ✅ PASS |
+| FMNIST | any | +15% | -14% | -3% | -2% | — |
+| FMNIST | evidence | +13% | +5% | +8% | **+26%** | ✅ PASS |
+| KMNIST | any | +0% | -9% | -1% | -10% | — |
+| KMNIST | evidence | +0% | +2% | +2% | **+4%** | ✅ PASS |
+
+**全部 9 个 config Pareto PASS。** Evidence repair 是范式级突破。
+
+### Phase 4: 观测协议迁移 (exp_phase4_observation_protocol.py)
+
+| Protocol | center Δacc | stripes Δacc | **total** |
+|----------|------------|-------------|-----------|
+| **pixel_bce** | **+20.0%** | **-13.0%** | **+7.0%** |
+| token_bce | +19.0% | -21.0% | -2.0% |
+| freq_dct | +19.0% | -21.0% | -2.0% |
+
+**像素 E_obs 仍然最强。** Token/Freq 协议 center 接近（-1%），但 stripes 大幅退化。
+原因：token/freq E_obs 在 z-space 或 DCT-space 定义，对 stripes 像素级部分遮挡信息丢失更严重。
+
+### Phase 5: 边界翻译离散化 (exp_phase5_discretize.py)
+
+| Config | Probe Acc | center Δacc | Enc Params | Dec Params |
+|--------|----------|------------|-----------|-----------|
+| **learned_fp32** | **69.0%** | +20.0% | 42,184 | 74,433 |
+| **learned_int8** | 68.6% | **+27.0%** | 42,184 | 74,433 |
+| fixed_filter_fp32 | 39.8% | -6.0% | 216 | 20,833 |
+
+**INT8 量化可行：** probe 仅降 0.4%，Δacc 反而提升（+27% vs +20%，量化噪声可能起正则化作用）。
+**固定滤波器不够：** probe 39.8%（瓶颈是编码器容量），params 仅 0.5%，但信息损失过大。
+
+### Phase 6: 约束写入接口 (exp_phase6_constraints.py)
+
+| Config | rot0 acc | rot90 acc | rot180 acc | rot270 acc | acc_var |
+|--------|---------|----------|-----------|-----------|---------|
+| no_constraint | 71.0% | 1.0% | 36.0% | 5.0% | 0.0793 |
+| **d4_constraint** | 69.0% | 2.0% | 40.0% | 4.0% | **0.0769** |
+| aug_rotate | 70.0% | 1.0% | 38.0% | 4.0% | 0.0792 |
+| d4_plus_aug | 71.0% | 1.0% | 37.0% | 5.0% | 0.0797 |
+
+| Config | rot0 viol | rot90 viol | rot180 viol | rot270 viol | viol_var |
+|--------|----------|-----------|-----------|-----------|---------|
+| no_constraint | 0.073 | 0.076 | 0.072 | 0.079 | 8e-6 |
+| **d4_constraint** | 0.276 | 0.276 | 0.278 | 0.275 | **1e-6** |
+| aug_rotate | 0.077 | 0.075 | 0.077 | 0.079 | 2e-6 |
+
+**D4 约束降低旋转灵敏度**（acc_var 0.0793→0.0769），violation variance 最低（1e-6）。
+但效果有限 — 旋转准确率整体很差（rot90/rot270 ~1-5%），根因是编码器不具备旋转等变性。
+**约束接口 API 已实现：** `ConstraintInterface.add_symmetry('D4')` + `compile()` 可声明约束。
+
 ## 范式契约（已固化）
 
 ```json
@@ -252,7 +312,7 @@ contiguous 远程（two_block, missing_quadrant）不触发 — local propagatio
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：Phase 3
+### 当前执行阶段：Phase 6 ✅ 全部完成
 
 ---
 
@@ -408,7 +468,12 @@ route_c/
 │   ├── exp_adaptive_policy.py  # Adaptive policy + threshold sweep
 │   ├── exp_generalization.py   # 跨数据集泛化（已完成）
 │   ├── exp_scale14.py          # 14×14 scale-up + GDA 验证（已完成）
-│   └── exp_evidence_strength.py # E_obs 残差驱动修复（已完成，total=+13%）
+│   ├── exp_evidence_strength.py # E_obs 残差驱动修复（已完成，total=+13%）
+│   ├── exp_fgo_trigger.py       # FGO 触发条件验证（28×28, 已完成）
+│   ├── exp_phase3_evidence_module.py # Phase 3: Evidence repair 跨数据集（已完成）
+│   ├── exp_phase4_observation_protocol.py # Phase 4: Token/Freq/Pixel E_obs（已完成）
+│   ├── exp_phase5_discretize.py  # Phase 5: INT8 + 固定滤波（已完成）
+│   └── exp_phase6_constraints.py # Phase 6: D4 约束接口（已完成）
 ├── PARADIGM_REPORT.md          # 范式研究报告（文献+benchmark+实验矩阵）
 ├── DESIGN_DOC.md               # 设计文档 v2.1
 └── CLAUDE.md                   # 本文件
