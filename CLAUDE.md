@@ -199,6 +199,31 @@ argmin E(z) subject to z_obs fixed ≅ Hopfield 模式完成 ≅ attention layer
 核心机制：全遮挡 patch 的 E_obs 残差 = ∞（无观测信号 → 必须修复），部分观测 patch 残差低（观测匹配 → 不修复）。
 范式结论：**修复决策应由观测空间信号 (E_obs) 驱动，不是编码空间信号 (E_core)**。
 
+### FGO v1 (exp_fgo_v1.py)
+
+| Grid | Variant | center gap | multi_hole gap | random_sparse gap |
+|------|---------|-----------|---------------|------------------|
+| 7×7 | fgo_multiband | **+7%** | +1% | +1% |
+| 7×7 | fgo_adaptive | **+7%** | -1% | 0% |
+| 14×14 | fgo_multiband | +1% | 0% | -1% |
+| 14×14 | fgo_adaptive | 0% | 0% | 0% |
+
+7×7 有增益但 14×14 消失。原因：local conv 多层堆叠在小 grid 上已近似全局混合。
+random_sparse@7×7 = -59%（灾难性）：bit_mask 标记所有位置为 masked → 零证据。
+
+### FGO-Trigger (exp_fgo_trigger.py) — 28×28 grid, 784 tokens
+
+| Mask | local Δacc | fgo_adaptive Δacc | **gap** | evidence% |
+|------|-----------|-------------------|---------|-----------|
+| two_block | +6.0% | +6.0% | 0% | 88% |
+| **checkerboard** | +23.0% | **+26.0%** | **+3%** | 49% |
+| missing_quadrant | +8.0% | +7.0% | -1% | 75% |
+| center | +28.0% | **+33.0%** | **+5%** | 75% |
+
+**FGO 触发条件确认：** 28×28 grid + checkerboard/center = fgo_adaptive 有 +3~5% gap。
+触发三要素：大 grid (≥28×28) + 分布式遮挡 + 足够证据密度。
+contiguous 远程（two_block, missing_quadrant）不触发 — local propagation 足够。
+
 ## 范式契约（已固化）
 
 ```json
@@ -211,18 +236,140 @@ argmin E(z) subject to z_obs fixed ≅ Hopfield 模式完成 ≅ attention layer
 }
 ```
 
-## 当前优先级
+## Session 连续性指令
 
-### 已完成
-1. ~~跨数据集泛化~~：✅ MNIST/FMNIST/KMNIST 全部 center Δacc > 0
-2. ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
-3. ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13.0%，远超 E_core 一致性 (+0.0%)
+**这个项目任务量很大，必须连续推进。** 如果 context compact 或换窗口：
+1. 读 CLAUDE.md 恢复进度（本文件）
+2. 检查 `当前执行阶段` 标记，从断点继续
+3. 每完成一个 Phase 立刻更新本文件并 git commit
+4. 每个 Phase 写成独立脚本 `benchmarks/exp_xxx.py`，可独立运行
+5. 用后台任务并行跑实验，不要等
 
-### 当前优先级
-4. **KMNIST 表征容量**：增加 k bits / grid size / encoder depth
-5. **CIFAR-10 小规模验证**：in_channels=3，验证范式在 RGB 上的可行性
-6. **MCMC 作为诊断工具**：确认 MCMC 永远不该用于部署
-7. **Paradigm narrative**：为论文准备范式叙事框架
+## 频域路线图 (Phase 0-6)
+
+### 已完成的前置实验
+- ~~跨数据集泛化~~：✅ MNIST/FMNIST/KMNIST 全部 center Δacc > 0
+- ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
+- ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
+
+### 当前执行阶段：Phase 3
+
+---
+
+### Phase 0：范式合同冻结（把接口变成不可破坏的 API）
+**目标：** Route C 变成可复用计算栈，不是实验脚本堆。
+
+冻结三份合同：
+- **表示合同**：z 的形状(k×H×W)、位宽(k=8)、网格(7/14)、mask 语义(evidence policy)
+- **能量合同**：E_core(局部规则) + E_obs(观测似然) + 可选 E_relation(全局关系项)，不允许 task head 混入
+- **推断合同**：推断器只学 q_φ(z|o,m)，训练目标只来自一致性(sleep-phase)
+
+过关标准：
+- 任意换数据集不用改接口
+- 任意新算子(FGO/GDA)必须插在同一位置，不破坏合同
+- 已完成 70%（Representation Contract + evidence policy），需要固化为 API
+
+---
+
+### Phase 1：FGO v1（频域全局算子）
+**目标：** 建立与 Transformer 类似的"全局混合原语"，用 FFT/DCT 走硬件最强路径。
+
+在 InpaintNet 内：local conv → **FGO** → local conv
+
+FGO 三个版本（先做这三种，足够论文）：
+1. **Low-pass only**：只开低频（全局形状/结构）
+2. **Multi-band gate**：低/中/高频 3 段门控（结构/边缘/纹理）
+3. **Data-adaptive gate**：门控由输入产生（task-agnostic）
+
+**关键：** GDA 在 contiguous mask 上无增益 → FGO 必须靠 **multi-hole / random-sparse** 证明价值。
+Center 只做 sanity check，不是主判据。
+
+过关标准：
+- random-sparse / multi-hole 上 FGO 明显优于 local-only（Δacc + BCE_after + 结构一致性）
+- 复杂度 O(N log N)，比 O(N²) attention 更能 scale
+- 14×14 上跑通
+
+**实验脚本：** `benchmarks/exp_fgo_v1.py`
+**测试 mask：** multi_hole, random_sparse, center(sanity check)
+**测试网格：** 7×7, 14×14
+
+---
+
+### Phase 2：FGO v2（内容相关的频域算子）
+**目标：** 在不回到 O(N²) 的前提下引入 content-based 能力。
+
+两条路（选一条）：
+- **2A) Content-conditioned spectral gating**：门控 G(f) 由 z 的全局摘要生成（按内容选频带）
+- **2B) 频域互相关**：FFT(h)·conj(FFT(h_ref))，用可见区域做 reference，全局匹配响应图
+
+过关标准：
+- OOD mask（条纹、稀疏结构化遮挡）下，content-conditioned 比固定频带更稳
+- 保持 FFT 吞吐优势
+
+**实验脚本：** `benchmarks/exp_fgo_v2.py`
+
+---
+
+### Phase 3：Evidence repair 固化为范式模块
+**目标：** 把 evidence_fixed/evidence_adaptive 写成标准模块，消灭 stripes 策略依赖。
+
+实现：
+- `RepairMask = f(residual_map, mask_geometry, uncertainty)` 标准接口
+- residual_map 来源：decoder 在可见像素的 BCE residual / token likelihood residual
+
+过关标准：
+- 不同 mask 类型无需单独设策略
+- total Δacc 不被某种 mask 拉垮（Pareto 改善）
+
+**注意：** Phase 6 的 constraint interface 也在这里体现 — 不是所有东西都要不变性，而是提供"可声明约束"的 API。
+
+---
+
+### Phase 4：从"像素观测"迁移到"协议化观测"
+**目标：** E_obs 从像素空间搬到离散协议空间，脱 MNIST 偶然性。
+
+两条路（选一条）：
+- **4A) Token likelihood**：观测转 tokens，E_obs 在 token 空间定义
+- **4B) Frequency-domain observation**：观测 = 低频系数 + 稀疏高频系数
+
+过关标准：
+- CIFAR-10/SVHN 子集上保持"修复=观测一致性+结构一致性"闭环
+- 不需要 L_cls 对齐语义
+
+---
+
+### Phase 5：边界翻译层可离散化迁移
+**目标：** CNN → 可网表化算子库（逐步替换，不一刀切）。
+
+步骤：
+1. 局部卷积 → 固定滤波(Sobel/LoG/Gabor/DCT) + 可学习门控
+2. 逐层量化约束（STE/LSQ/PTQ）：FP32→INT8→更低
+3. 输出协议固定化：z 的 bit-budget、频带结构
+
+过关标准：
+- FLOPs 下降、数据类型降低，范式核心仍工作
+- 部分算子可替换为 LUT/bitwise 近似
+
+---
+
+### Phase 6：对称性约束接口（不是全面改造）
+**目标：** 提供 **constraint writing interface**，让用户声明约束，系统自动编入能量函数。
+
+**这不是"所有东西都要不变性"，而是提供写入 constraint 的 API。**
+
+三种实现（按范式纯度排序）：
+1. **E_core 加群等变约束(D4)**：E_core(z) + E_core(R·z) + …
+2. **频域协议天然等变**：DCT/FFT 低频能量对旋转/缩放有规律（径向能量谱）
+3. **连续侧 augmentation**：最不范式，但最容易，仅作 baseline
+
+FMNIST 验证（形状主体稳定）：
+- rotation consistency (0/90/180/270)
+- scale jitter (0.8-1.2)
+- 定义为 latent consistency 而非 label invariance
+
+过关标准：
+- 旋转/缩放扰动下 E_core violation 更低
+- 修复性能对变换更鲁棒（Δacc 波动变小）
 
 ## 构建与运行
 
