@@ -85,9 +85,13 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 9 | **Scale-up 有效，GDA 无增益** | 14×14 Δacc=+39% (vs 7×7 +25%)，GDA gap=0% | 范式五需重新定位 |
 | 10 | **E_obs 驱动修复 >> E_core 驱动** | evidence_fixed total=+13.0% vs adaptive_pp +0.0% | 范式四：观测几何决定修复 |
 | 11 | **Evidence repair 跨数据集 Pareto** | MNIST/FMNIST/KMNIST 9/9 configs Pareto PASS | 范式四：通用修复策略 |
-| 12 | **像素 E_obs 优于 token/freq** | pixel total=+7%, token=-2%, freq=-2% | 范式四：像素空间信息最丰富 |
+| 12 | **像素 E_obs 优于 token/freq（7×7）** | pixel total=+7%, token=-2%, freq=-2% | 范式四：像素空间信息最丰富（低分辨率） |
 | 13 | **INT8 量化可行** | probe drop 0.4%, Δacc 反升 +7% | 范式五：离散化路径存在 |
 | 14 | **D4 约束接口有效但有限** | acc_var 降低 3%, viol_var 最低 | 范式六：约束 API 可行 |
+| 15 | **协议化观测在正确分辨率下成立** | 14×14: token +43%, freq +43%, pixel +42% | 范式四：z-space 观测可脱离像素 |
+| 16 | **INT4 量化可行，QAT 最优** | INT4 PTQ probe +1.4%, QAT Δacc +31% | 范式五：硬件化现实路径 |
+| 17 | **Gabor/DCT bank > Sobel/LoG** | probe 55.6% vs 39.8%，但仍不足 | 范式五：固定滤波器需更多基 |
+| 18 | **OperatorSelector 正确保守** | 7×7 全选 local，与 FGO 触发条件一致 | 范式架构：条件调度 |
 
 ## 五大计算范式
 
@@ -284,6 +288,51 @@ contiguous 远程（two_block, missing_quadrant）不触发 — local propagatio
 但效果有限 — 旋转准确率整体很差（rot90/rot270 ~1-5%），根因是编码器不具备旋转等变性。
 **约束接口 API 已实现：** `ConstraintInterface.add_symmetry('D4')` + `compile()` 可声明约束。
 
+### Phase 7: 高分辨率协议观测 (exp_phase7_hires_protocol.py)
+
+| 网格 | 协议 | center Δacc | stripes Δacc | **total** |
+|------|------|------------|-------------|-----------|
+| 7×7 | pixel_bce | +23% | -13% | +10% |
+| 7×7 | token_bce | +20% | -22% | -2% |
+| 7×7 | freq_dct | +20% | -22% | -2% |
+| **14×14** | **pixel_bce** | **+43%** | **-1%** | **+42%** |
+| **14×14** | **token_bce** | **+44%** | **-1%** | **+43%** |
+| **14×14** | **freq_dct** | **+44%** | **-1%** | **+43%** |
+
+**GPT 诊断完全正确：** 分辨率是 token/freq 失败的根因。14×14 下三种协议完全收敛。
+Stripes 从 -22% → -1%。z-space 观测协议在 2×2 patch 分辨率下可行。
+
+### Phase 8: INT4 量化 + Gabor/DCT (exp_phase8_int4_quant.py)
+
+| 配置 | Probe | center Δacc | Enc Params |
+|------|-------|------------|-----------|
+| learned_fp32 | 68.2% | +22% | 42,184 |
+| learned_int8 | 68.6% | +18% | 42,184 |
+| **learned_int4_ptq** | **69.6%** | +21% | 42,184 |
+| **qat_int4** | 68.8% | **+31%** | 42,184 |
+| gabor_dct_bank | 55.6% | +2% | 808 |
+
+**INT4 全 VIABLE。** QAT Δacc +31% 是所有配置最高。Gabor/DCT bank probe 55.6%（比 Phase 5 Sobel/LoG 39.8% 提升 40%）。
+
+### Phase 9: 条件算子调度 (exp_phase9_operator_selector.py)
+
+| Mask | Selected | local Δacc | fgo Δacc | gap | evidence% |
+|------|----------|-----------|---------|-----|-----------|
+| center | local | +14% | +22% | +8% | 0.49 |
+| stripes | local | -22% | -23% | -1% | 0.29 |
+| checkerboard | local | -2% | -1% | +1% | 0.49 |
+| multi_hole | local | -10% | -6% | +4% | 0.76 |
+
+| 策略 | total |
+|------|-------|
+| Always local | -20% |
+| Always FGO | -8% |
+| Auto-dispatch | -20% |
+| Oracle (best) | -7% |
+
+7×7 下 selector 正确全选 local（grid<14）。FGO 在 center/multi_hole 有 gap，但小 grid 不可靠。
+**OperatorSelector 的价值在大 grid：** 在 28×28 + distributed mask 时才触发 FGO（见 Phase 2）。
+
 ## 范式契约（已固化）
 
 ```json
@@ -312,7 +361,7 @@ contiguous 远程（two_block, missing_quadrant）不触发 — local propagatio
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：Phase 6 ✅ 全部完成
+### 当前执行阶段：Phase 9 ✅ → 准备 Phase 10+ (逆映射 bridge)
 
 ---
 
@@ -473,7 +522,10 @@ route_c/
 │   ├── exp_phase3_evidence_module.py # Phase 3: Evidence repair 跨数据集（已完成）
 │   ├── exp_phase4_observation_protocol.py # Phase 4: Token/Freq/Pixel E_obs（已完成）
 │   ├── exp_phase5_discretize.py  # Phase 5: INT8 + 固定滤波（已完成）
-│   └── exp_phase6_constraints.py # Phase 6: D4 约束接口（已完成）
+│   ├── exp_phase6_constraints.py # Phase 6: D4 约束接口（已完成）
+│   ├── exp_phase7_hires_protocol.py # Phase 7: 高分辨率协议观测（已完成）
+│   ├── exp_phase8_int4_quant.py  # Phase 8: INT4 量化 + Gabor/DCT（已完成）
+│   └── exp_phase9_operator_selector.py # Phase 9: 条件算子调度（已完成）
 ├── PARADIGM_REPORT.md          # 范式研究报告（文献+benchmark+实验矩阵）
 ├── DESIGN_DOC.md               # 设计文档 v2.1
 └── CLAUDE.md                   # 本文件
