@@ -1,0 +1,5 @@
+device: cpu
+platform: Linux-5.15.167.4-microsoft-standard-WSL2-x86_64-with-glibc2.29
+python: 3.8.10
+torch: 2.4.1+cu121
+batch_size: 1

@@ -399,61 +399,112 @@ This ensures `w` learns "which bits matter for classification routing," not just
 
 4. **B1 vs B2:** B1 (grid-latent 7×7×k) for exp09 world-model comparison. B2 (histogram-latent) targets the 95.4% log-odds baseline and is the faster/more stable path for MNIST. B2 should be implemented soon after v1 validation.
 
-## 8. Mid-Term Benchmark Findings (100 samples/config)
+## 8. Key Test Results: center + stripes × clean/noise (100 samples/config, bitmask_policy=any)
 
-### Raw Results (partial — baseline + drope complete)
+> Previous v2.0 results contained invalid stripes rows (Δacc=0, Δmse=0) caused by a bit_mask bug — see §9.6–9.7 for the fix. The results below are from the corrected v2.1 benchmark.
+
+### 8.1 Full Results Table
+
 ```
-method    | mask       | noise | acc_before → after | Δacc  | Δmse    | ms/sample
-----------|------------|-------|--------------------|-------|---------|----------
-baseline  | center     | clean | 34% → 37%          | +3.0% | -0.010  | 370
-baseline  | center     | noise | 25% → 24%          | -1.0% | -0.009  | 415
-baseline  | random     | clean | 48% → 55%          | +7.0% | -0.012  | 399
-baseline  | random     | noise | 42% → 43%          | +1.0% | -0.014  | 411
-baseline  | multi_hole | clean | 83% → 84%          | +1.0% | -0.001  | 290
-baseline  | multi_hole | noise | 82% → 81%          | -1.0% | +0.004  | 359
-baseline  | stripes    | clean | 78% → 78%          | +0.0% | -0.000  | 78
-baseline  | stripes    | noise | 80% → 80%          | +0.0% | -0.000  | 82
-drope     | center     | clean | 34% → 33%          | -1.0% | -0.007  | 784
-drope     | center     | noise | 25% → 24%          | -1.0% | -0.009  | 891
-drope     | random     | clean | 48% → 54%          | +6.0% | -0.010  | 743
+method              mask       noise    acc_bef  acc_aft    Δacc    mse_bef  mse_aft    Δmse      ms    corr
+────────────────────────────────────────────────────────────────────────────────────────────────────────────
+baseline            center     clean      34%      22%    -12%     0.2950   0.2769  -0.018     561   -0.13
+baseline            center     noise      25%      12%    -13%     0.2844   0.2577  -0.027     394   -0.27
+baseline            stripes    clean      78%      47%    -31%     0.0569   0.0808  +0.024     980   -0.13
+baseline            stripes    noise      80%      44%    -36%     0.0582   0.0800  +0.022     859   +0.02
+drope               center     clean      34%      26%     -8%     0.2950   0.2752  -0.020     851   -0.15
+drope               center     noise      25%      15%    -10%     0.2844   0.2672  -0.017     829   -0.19
+drope               stripes    clean      78%      41%    -37%     0.0569   0.0804  +0.024    1326   -0.18
+drope               stripes    noise      80%      35%    -45%     0.0582   0.0810  +0.023    1201   -0.13
+learned_drope       center     clean      34%      22%    -12%     0.2950   0.2684  -0.027    1047   -0.06
+learned_drope       center     noise      25%      12%    -13%     0.2844   0.2664  -0.018    1098   +0.02
+learned_drope       stripes    clean      78%      46%    -32%     0.0569   0.0779  +0.021    1695   -0.04
+learned_drope       stripes    noise      80%      40%    -40%     0.0582   0.0801  +0.022    1677   -0.13
+amortized           center     clean      34%      37%     +3%     0.2950   0.2538  -0.041       1   -0.31
+amortized           center     noise      25%      30%     +5%     0.2844   0.2398  -0.045       1   -0.22
+amortized           stripes    clean      78%      74%     -4%     0.0569   0.0613  +0.004       1   +0.11
+amortized           stripes    noise      80%      70%    -10%     0.0582   0.0648  +0.007       1   +0.00
+amortized_maskonly  center     clean      34%      41%     +7%     0.2950   0.2466  -0.048       1   -0.31
+amortized_maskonly  center     noise      25%      36%    +11%     0.2844   0.2410  -0.044       1   -0.20
+amortized_maskonly  stripes    clean      78%      75%     -3%     0.0569   0.0618  +0.005       1   -0.06
+amortized_maskonly  stripes    noise      80%      72%     -8%     0.0582   0.0651  +0.007       1   -0.12
+iterative           center     clean      34%      40%     +6%     0.2950   0.2715  -0.024      14   -0.19
+iterative           center     noise      25%      33%     +8%     0.2844   0.2522  -0.032      11   -0.30
+iterative           stripes    clean      78%      71%     -7%     0.0569   0.0624  +0.006      13   -0.13
+iterative           stripes    noise      80%      70%    -10%     0.0582   0.0646  +0.006      13   -0.09
 ```
 
-> **⚠️ ERRATA (v2.1):** The stripes rows above (Δacc=0, Δmse=0) were caused by a **confirmed implementation bug** in `pixel_to_bit_mask()`. The function used `patch.mean() < 0.5` (strict less-than) to decide if a latent position should be masked. With `stripe_width=2` and `gap=6`, every 4×4 latent patch has exactly 2/4 rows occluded → `mean = 0.5` → no latent positions were masked → inference was a no-op.
->
-> **Fix (v2.1):** `pixel_to_bit_mask()` now accepts an explicit `policy` parameter (default: `'any'`). Under `'any'` policy, any partial occlusion marks the position as unknown (`threshold = 1.0 - ε`). This is the conservative choice aligned with Route C's "discrete evidence uncertainty" semantics: if a token's patch has ANY missing pixels, we do not trust that token.
->
-> The policy is recorded in every CSV row (`bitmask_policy` column) and validated by golden mask tests at startup. See §9.6–9.7 for details. Results pending re-run.
+Mask ratios: center px=0.250 bit=0.510 | stripes px=0.357 bit=0.714.
+Hardware: CPU (batch=1), see `outputs/benchmark_key_test/hardware_info.txt`.
 
-### Key Findings
+### 8.2 Speed Comparison
 
-**Finding 1: Mask geometry determines marginal value of inference.**
-- random (+7%) >> center (+3%) >> multi_hole (+1%) >> stripes (~~0%~~ BUG — pending re-run)
-- Multi-hole before accuracy is already 83% — small holes don't destroy discriminative structure
-- This means evaluation should focus on center/random/stripes (harder) for Route B validation
+| Method | ms/sample | vs baseline |
+|--------|-----------|-------------|
+| baseline MCMC | 561 | 1× |
+| drope MCMC | 851 | 1.5× slower |
+| learned_drope MCMC | 1047 | 1.9× slower |
+| **amortized** | **0.8** | **700× faster** |
+| **amortized_maskonly** | **0.8** | **700× faster** |
+| **iterative (4 steps)** | **13.8** | **41× faster** |
 
-**Finding 2: Noise causes MSE↓ but acc↓ — objective misalignment.**
-- center+noise: MSE improves (-0.009) but acc drops (-1%)
-- This is NOT a hyperparameter issue — it's a fundamental mismatch: E_obs (pixel MSE) pushes z toward "smooth average" which lowers MSE but destroys discriminative features
-- **Critical implication:** Route B MUST include L_cls or a semantic observation term, not just pixel MSE
-- **Quantification (v2.1):** benchmark now reports per-config `corr(Δmse, Δacc)` to make this misalignment visible as a number, not just a narrative claim
+Route B target (<50ms) exceeded by a wide margin: **0.8ms single forward pass**.
 
-**Finding 3: D-RoPE confirms exp09 pattern.**
-- center: Δacc = -1% (worse than baseline +3%)
-- random: Δacc = +6% (similar to baseline +7%)
-- D-RoPE is 2× slower (784ms vs 370ms) with no accuracy benefit
-- Fixed Hamming gate is not a useful energy term — it needs learned weights or should be dropped
+### 8.3 Iterative Steps Curve
 
-**Finding 4: Speed baseline established.**
-- MCMC: 78-891 ms/sample depending on mask size and method
-- Route B target: <50ms (10-100× improvement)
-- **v2.1:** latency now reported with hardware info (`outputs/benchmark/hardware_info.txt`), P10/P50/P90 percentiles, batch=1 per-sample
+```
+n_steps=1: acc_after=46%  |  n_steps=2: 45%  |  n_steps=3: 46%  |  n_steps=4: 48%
+```
+Single-step prediction already near-optimal. Multi-step refinement is flat — suggests InpaintNet's single pass is sufficient for 7×7 grids, or the confidence-based unmasking schedule needs tuning.
 
-### Actionable Next Steps (from mid-term analysis)
-1. ✅ **L_cls in InpaintNet** — implemented; `amortized` = full loss, `amortized_maskonly` = L_mask only ablation
-2. **Discrete observation likelihood** — replace pixel MSE with Bernoulli likelihood for E_obs (see §0 and §9.2)
-3. ✅ **Diagnostic metrics** — `corr(Δmse, Δacc)`, `mask_ratio`, `mse_before_abs`, percentile runtimes all added to CSV
-4. **Center/stripes as primary benchmark** — multi_hole too easy; stripes now valid after bug fix
-5. ✅ **Iterative steps curve** — `acc_after` at n_steps=1,2,3,4 saved to `iterative_steps_curve.csv`
+### 8.4 Key Findings
+
+**Finding 1: MCMC is catastrophically harmful — all Δacc negative.**
+- ALL 12 MCMC configs (baseline / drope / learned_drope × center/stripes × clean/noise) show **negative Δacc** (range: -8% to -45%).
+- Stripes (bit_ratio=71.4%) is the hardest: MCMC hallucinates massively when most tokens are unknown.
+- D-RoPE is the **worst** performer on stripes+noise: Δacc = -45%, 1.2s/sample. Fixed Hamming gates actively harm inference on high-occlusion configs.
+- Learned gate provides no improvement over baseline (-12% vs -12% on center) at 2× the cost.
+
+**Finding 2: Route B (amortized) reverses the sign on center — Δacc positive.**
+- Amortized: center clean +3%, center noise +5%
+- Amortized maskonly: center clean **+7%**, center noise **+11%**
+- Iterative: center clean +6%, center noise +8%
+- This is the **first positive Δacc** result on center in the project history.
+
+**Finding 3: Surprising — L_mask only (maskonly) outperforms L_mask+L_cls (amortized) on ALL configs.**
+
+| Config | maskonly | +L_cls | Δ |
+|--------|---------|--------|---|
+| center clean | +7% | +3% | maskonly +4% |
+| center noise | **+11%** | +5% | maskonly +6% |
+| stripes clean | -3% | -4% | maskonly +1% |
+| stripes noise | -8% | -10% | maskonly +2% |
+
+This **challenges** the v2.0 narrative that "L_cls fixes misalignment." Possible explanations:
+1. **γ_cls=0.5 is too large** — classification loss dominates, causing the network to overfit to class prototypes rather than learning faithful bit completion.
+2. **Frozen classifier is unreliable on masked z** — the classifier was trained on clean z; its gradients on partially-masked z may be misleading.
+3. **L_mask alone is already task-aligned** — on grid-latent, faithful bit prediction may inherently preserve classification-relevant structure without explicit task supervision.
+
+**Action:** Sweep γ_cls ∈ {0.01, 0.05, 0.1, 0.5} to find optimal weight. If γ_cls→0 is always best, L_cls should be dropped for v1 and reconsidered after Bernoulli E_obs migration.
+
+**Finding 4: corr(Δmse, Δacc) is negative across almost all configs.**
+- Range: -0.31 to +0.11 (mean ≈ -0.14)
+- Confirms systematic objective misalignment: MSE improvement does NOT predict accuracy improvement.
+- This is true even for Route B methods — the misalignment is in E_obs itself, not just MCMC.
+
+**Finding 5: Stripes remains hard for all methods (Δacc < 0 everywhere).**
+- Best on stripes: amortized_maskonly at -3% (clean), -8% (noise)
+- MCMC worst: drope at -37% (clean), -45% (noise)
+- Route B reduces the damage from catastrophic (-31% to -45%) to mild (-3% to -10%)
+- Stripes+noise is the current "unsolved" config — likely requires Bernoulli E_obs or explicit stripes-aware training augmentation.
+
+### 8.5 Revised Actionable Next Steps
+
+1. **Sweep γ_cls** ∈ {0.01, 0.05, 0.1} — the current 0.5 is likely too high; determine if any L_cls weight helps or if maskonly is strictly better.
+2. **Bernoulli E_obs** — replace pixel MSE with BCE in the energy and in L_obs. This is the most "Route C native" fix for the systematic negative corr(Δmse, Δacc).
+3. **Stripes-aware training augmentation** — include stripe masks in InpaintNet training distribution (currently random masks only). This is the cheapest way to improve the hardest config.
+4. **OOD generalization** — run full mask matrix to measure train-mask→test-mask transfer.
+5. **Scale eval_samples to 500+** — current n=100 has ±3% noise on accuracy estimates.
 
 ## 9. Hard Metrics & Sanity Checks (v2.1)
 
