@@ -418,7 +418,11 @@ drope     | center     | noise | 25% → 24%          | -1.0% | -0.009  | 891
 drope     | random     | clean | 48% → 54%          | +6.0% | -0.010  | 743
 ```
 
-> **⚠️ ERRATA (v2.1):** The stripes rows above (Δacc=0, Δmse=0) were caused by a **confirmed implementation bug** in `pixel_to_bit_mask()`. The function used `patch.mean() < 0.5` (strict less-than) to decide if a latent position should be masked. With `stripe_width=2` and `gap=6`, every 4×4 latent patch has exactly 2/4 rows occluded → `mean = 0.5` → no latent positions were masked → inference was a no-op. **Fixed** in v2.1 by changing threshold to `< 1.0 - ε` (any partial occlusion marks the position). Results pending re-run.
+> **⚠️ ERRATA (v2.1):** The stripes rows above (Δacc=0, Δmse=0) were caused by a **confirmed implementation bug** in `pixel_to_bit_mask()`. The function used `patch.mean() < 0.5` (strict less-than) to decide if a latent position should be masked. With `stripe_width=2` and `gap=6`, every 4×4 latent patch has exactly 2/4 rows occluded → `mean = 0.5` → no latent positions were masked → inference was a no-op.
+>
+> **Fix (v2.1):** `pixel_to_bit_mask()` now accepts an explicit `policy` parameter (default: `'any'`). Under `'any'` policy, any partial occlusion marks the position as unknown (`threshold = 1.0 - ε`). This is the conservative choice aligned with Route C's "discrete evidence uncertainty" semantics: if a token's patch has ANY missing pixels, we do not trust that token.
+>
+> The policy is recorded in every CSV row (`bitmask_policy` column) and validated by golden mask tests at startup. See §9.6–9.7 for details. Results pending re-run.
 
 ### Key Findings
 
@@ -499,3 +503,35 @@ All benchmark runs output `outputs/benchmark/hardware_info.txt` with:
 - Batch size (always 1 for per-sample evaluation)
 
 The `<50ms` KPI in §3 is meaningless without specifying hardware. All reported latencies are per-sample (batch=1) on the device recorded in this file.
+
+### 9.6 Bitmask policy: explicit parameter, recorded in CSV
+
+The decision "when is a latent token considered unknown?" is now an **explicit, tracked parameter**:
+
+| Policy | Threshold | Behavior | Use case |
+|--------|-----------|----------|----------|
+| `any` (default) | `visible_ratio < 1.0 - ε` | Any partial occlusion → masked | Conservative; matches "discrete evidence uncertainty" semantics |
+| `majority` | `visible_ratio < 0.5` | More-than-half occluded → masked | Aggressive; risks missing partial occlusion (stripes bug) |
+| `soft` (future) | N/A | Return `1 - visible_ratio` as continuous weight | Most principled; requires soft-masked inference pipeline |
+
+**Why this matters:** The v2.0 stripes bug was caused by an implicit, undocumented `majority`-like policy. By making the policy explicit and recording it in every CSV row (`bitmask_policy` column), future results are always reproducible and any policy change is immediately visible in the data.
+
+**CLI:** `--bitmask_policy any|majority`
+
+### 9.7 Golden mask tests (anti-regression)
+
+Before every benchmark run, `run_golden_mask_tests()` verifies:
+
+1. Each mask type produces `pixel_mask_ratio` within expected range:
+   - center: [0.20, 0.30] (theoretical: 0.25)
+   - random: [0.15, 0.40]
+   - multi_hole: [0.05, 0.20]
+   - stripes: [0.30, 0.40] (theoretical: ~0.357)
+
+2. Each mask type produces `bit_mask_ratio > 0` under the current policy.
+
+3. No mask produces zero pixel occlusion.
+
+If any test fails, the benchmark **aborts with AssertionError** before spending compute. This prevents "silent no-op" bugs like the v2.0 stripes issue from ever reaching the results CSV.
+
+**Design rationale:** These are "canary tests" — cheap (~1ms), run every time, catch the most dangerous class of bugs (metric infrastructure failures that produce plausible-looking zeros).

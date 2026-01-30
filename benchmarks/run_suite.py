@@ -82,6 +82,9 @@ class SuiteConfig:
     learned_gate_epochs: int = 10
     learned_gate_lr: float = 1e-3
 
+    # Bit mask policy: 'any' (conservative) | 'majority' | 'soft' (future)
+    bitmask_policy: str = 'any'
+
     seed: int = 42
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     output_dir: str = "outputs/benchmark"
@@ -285,23 +288,41 @@ NOISE_TYPES = ['clean', 'noise', 'bias', 'dropout']  # blur needs scipy
 # BIT MASK UTILITY
 # ============================================================================
 
-def pixel_to_bit_mask(pixel_mask: np.ndarray, n_bits: int, latent_size: int = 7) -> np.ndarray:
+def pixel_to_bit_mask(pixel_mask: np.ndarray, n_bits: int, latent_size: int = 7,
+                      policy: str = 'any') -> np.ndarray:
     """Convert pixel mask to bit mask for latent grid.
 
-    A latent position is marked as masked if ANY pixel in its patch is occluded
-    (i.e. patch mean < 1.0, not < 0.5).  The old threshold of 0.5 caused stripes
-    (stripe_width=2, gap=6) to produce an all-zero bit_mask because every 4×4
-    patch had exactly 50% occlusion — the strict '<' missed them entirely.
+    Args:
+        policy: How to decide if a latent position is masked.
+            'any'      — masked if ANY pixel in the patch is occluded (conservative).
+                         Threshold: patch_visible_ratio < 1.0 - ε.
+            'majority' — masked if MORE THAN HALF of patch pixels are occluded.
+                         Threshold: patch_visible_ratio < 0.5.
+            'soft'     — (future) return continuous reliability weight per position.
+
+    The v2.0 bug used an implicit 'majority' policy with strict '<0.5', which
+    caused stripes (stripe_width=2, gap=6) to produce an all-zero bit_mask —
+    every 4×4 patch had exactly 50% occlusion.  v2.1 defaults to 'any'.
     """
+    if policy == 'soft':
+        raise NotImplementedError("Soft bitmask policy not yet implemented; use 'any' or 'majority'.")
+
     patch_size = 28 // latent_size
     bit_mask = np.zeros((n_bits, latent_size, latent_size), dtype=bool)
+
+    if policy == 'any':
+        threshold = 1.0 - 1e-6
+    elif policy == 'majority':
+        threshold = 0.5
+    else:
+        raise ValueError(f"Unknown bitmask policy: {policy!r}. Use 'any' or 'majority'.")
+
     for i in range(latent_size):
         for j in range(latent_size):
             y0, y1 = i * patch_size, (i + 1) * patch_size
             x0, x1 = j * patch_size, (j + 1) * patch_size
             patch_visible_ratio = pixel_mask[y0:y1, x0:x1].mean()
-            # Mark as masked if any pixel in the patch is occluded
-            if patch_visible_ratio < 1.0 - 1e-6:
+            if patch_visible_ratio < threshold:
                 bit_mask[:, i, j] = True
     return bit_mask
 
@@ -322,6 +343,91 @@ def compute_occluded_mse(o_hat, o_orig, mask):
     if occ.sum() == 0:
         return 0.0
     return ((o_hat - o_orig)**2 * occ).sum() / occ.sum()
+
+
+# ============================================================================
+# GOLDEN MASK TESTS — prevent regressions in mask generation / bit conversion
+# ============================================================================
+
+# Expected pixel_mask_ratio per mask type (approximate ranges).
+# stripes: 5 stripes × 2 rows × 28 cols = 280/784 ≈ 0.357
+# center:  14×14 / 28×28 = 0.25
+# multi_hole: 5 holes × 4×4 / 784 ≈ 0.102 (varies with overlap)
+# random: 14×14 / 784 = 0.25 (varies with position)
+EXPECTED_MASK_RATIOS = {
+    'center':     (0.20, 0.30),   # 14×14 center = 25%
+    'random':     (0.15, 0.40),   # 14×14 block, random pos
+    'multi_hole': (0.05, 0.20),   # 5 small holes, possible overlap
+    'stripes':    (0.30, 0.40),   # ~35.7% theoretical
+}
+
+# Minimum expected bit_mask_ratio per mask type under 'any' policy.
+# Under 'any' policy, even partial patch occlusion counts → these are lower bounds.
+EXPECTED_BIT_MASK_RATIO_MIN = {
+    'center':     0.10,
+    'random':     0.05,
+    'multi_hole': 0.02,
+    'stripes':    0.10,  # was 0.0 under the old bug!
+}
+
+
+def run_golden_mask_tests(n_bits: int = 8, latent_size: int = 7,
+                          policy: str = 'any', verbose: bool = True) -> bool:
+    """Verify mask generation and bit conversion for all mask types.
+
+    Returns True if all tests pass.  Raises AssertionError on failure.
+    """
+    all_ok = True
+    rng = np.random.default_rng(12345)  # fixed seed for reproducibility
+
+    for mask_type in ['center', 'random', 'multi_hole', 'stripes']:
+        if mask_type == 'center':
+            pm = make_center_mask(28, 28)
+        elif mask_type == 'random':
+            pm = make_random_mask(28, 28, rng=rng)
+        elif mask_type == 'multi_hole':
+            pm = make_multi_hole_mask(28, 28, rng=rng)
+        elif mask_type == 'stripes':
+            pm = make_stripe_mask(28, 28)
+
+        bm = pixel_to_bit_mask(pm, n_bits, latent_size, policy=policy)
+
+        px_ratio = compute_mask_ratio(pm)
+        bit_ratio = compute_bit_mask_ratio(bm)
+
+        lo, hi = EXPECTED_MASK_RATIOS[mask_type]
+        min_bit = EXPECTED_BIT_MASK_RATIO_MIN[mask_type]
+
+        ok = True
+        msgs = []
+
+        if not (lo <= px_ratio <= hi):
+            ok = False
+            msgs.append(f"pixel_mask_ratio={px_ratio:.3f} outside [{lo}, {hi}]")
+        if bit_ratio < min_bit:
+            ok = False
+            msgs.append(f"bit_mask_ratio={bit_ratio:.3f} < min {min_bit}")
+        if px_ratio <= 0:
+            ok = False
+            msgs.append("pixel_mask_ratio=0 (no occlusion)")
+        if bit_ratio <= 0:
+            ok = False
+            msgs.append("bit_mask_ratio=0 (no latent masking — likely threshold bug)")
+
+        status = "PASS" if ok else "FAIL"
+        if verbose:
+            print(f"  [{status}] {mask_type:<12} policy={policy}: "
+                  f"px_ratio={px_ratio:.3f}, bit_ratio={bit_ratio:.3f}"
+                  + (f"  !! {'; '.join(msgs)}" if msgs else ""))
+        if not ok:
+            all_ok = False
+
+    if not all_ok:
+        raise AssertionError(
+            "Golden mask tests FAILED — mask generation or bit conversion is broken. "
+            "See output above for details."
+        )
+    return True
 
 
 # ============================================================================
@@ -701,7 +807,8 @@ def run_evaluation(
         else:
             pixel_mask = make_center_mask(28, 28)
 
-        bit_mask = pixel_to_bit_mask(pixel_mask, cfg.n_bits, cfg.latent_size)
+        bit_mask = pixel_to_bit_mask(pixel_mask, cfg.n_bits, cfg.latent_size,
+                                     policy=cfg.bitmask_policy)
 
         # ── Sanity checks (computed once per config) ──
         if pixel_mask_ratio is None:
@@ -769,6 +876,7 @@ def run_evaluation(
         'runtime_p10': float(np.percentile(results['runtime_ms'], 10)),
         'runtime_p50': float(np.percentile(results['runtime_ms'], 50)),
         'runtime_p90': float(np.percentile(results['runtime_ms'], 90)),
+        'bitmask_policy': cfg.bitmask_policy,
     }
 
 
@@ -791,6 +899,11 @@ def main():
     parser.add_argument('--mask_types', type=str, default='center,random,multi_hole,stripes')
     parser.add_argument('--noise_types', type=str, default='clean,noise,bias,dropout')
     parser.add_argument('--output_dir', type=str, default='outputs/benchmark')
+    parser.add_argument('--bitmask_policy', type=str, default='any',
+                        choices=['any', 'majority'],
+                        help="How to convert pixel mask to latent bit mask. "
+                             "'any'=conservative (any occlusion marks position), "
+                             "'majority'=only if >50%% occluded.")
     args = parser.parse_args()
 
     cfg = SuiteConfig(
@@ -798,6 +911,7 @@ def main():
         device=args.device,
         eval_samples=args.eval_samples,
         output_dir=args.output_dir,
+        bitmask_policy=args.bitmask_policy,
     )
 
     mask_types = args.mask_types.split(',')
@@ -819,7 +933,14 @@ def main():
     print(f"Methods: {methods}")
     print(f"Mask types: {mask_types}")
     print(f"Noise types: {noise_types}")
+    print(f"Bitmask policy: {cfg.bitmask_policy}")
     print(f"Eval samples per config: {cfg.eval_samples}")
+
+    # ── Golden mask tests (prevent regressions) ──
+    print("\n[0] Running golden mask tests...")
+    run_golden_mask_tests(n_bits=cfg.n_bits, latent_size=cfg.latent_size,
+                          policy=cfg.bitmask_policy, verbose=True)
+    print("    All golden mask tests PASSED.")
 
     # Load data
     print("\n[1] Loading data...")
@@ -916,7 +1037,7 @@ def main():
             'acc_before', 'acc_after', 'delta_acc',
             'mse_before', 'mse_after', 'delta_mse',
             'runtime_ms', 'n_samples',
-            'pixel_mask_ratio', 'bit_mask_ratio',
+            'pixel_mask_ratio', 'bit_mask_ratio', 'bitmask_policy',
             'corr_dmse_dacc',
             'mse_before_abs', 'mse_after_abs',
             'runtime_p10', 'runtime_p50', 'runtime_p90',
@@ -1034,7 +1155,8 @@ def main():
                 x_c = test_x[idx_s].numpy()[0]
                 lbl = test_y[idx_s].item()
                 pm = make_center_mask(28, 28)
-                bm = pixel_to_bit_mask(pm, cfg.n_bits, cfg.latent_size)
+                bm = pixel_to_bit_mask(pm, cfg.n_bits, cfg.latent_size,
+                                       policy=cfg.bitmask_policy)
                 x_occ = x_c * pm
                 with torch.no_grad():
                     x_t = torch.from_numpy(x_occ[None, None].astype(np.float32)).to(device)
