@@ -92,9 +92,10 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 16 | **INT4 量化可行，QAT 最优** | INT4 PTQ probe +1.4%, QAT Δacc +31% | 范式五：硬件化现实路径 |
 | 17 | **Gabor/DCT bank > Sobel/LoG** | probe 55.6% vs 39.8%，但仍不足 | 范式五：固定滤波器需更多基 |
 | 18 | **OperatorSelector 正确保守** | 7×7 全选 local，与 FGO 触发条件一致 | 范式架构：条件调度 |
-| 19 | **Feature Translator 需更多位宽** | 256ch→8bit cosine=0.50, 信息瓶颈太严重 | 逆映射：Q/R 容量不足 |
+| 19 | **Feature Bridge 需同域+多级量化** | binary 10%→INT8 97.6%, VQ 94-96% | 逆映射：域匹配+幅值保留 |
 | 20 | **z 是稳定协议（cycle contract）** | Hamming(z,ẑ)=1.4%, 5-cycle drift<2.8% | 范式核心：协议可逆 |
 | 21 | **Repair 提升 cycle 稳定性** | 遮挡后 Hamming 1.87%→1.57%, gain=+0.003 | 范式四：repair 增强协议 |
+| 22 | **Feature Bridge 全配置可行** | 8/8 configs ≥94% agreement, repair +16-22% | 逆映射：INT/VQ 双路均可 |
 
 ## 五大计算范式
 
@@ -345,8 +346,47 @@ Stripes 从 -22% → -1%。z-space 观测协议在 2×2 patch 分辨率下可行
 | 2 | 0.501 | 9.0% | 2.12 | 33,154 | 33,408 |
 
 **全部 DEGRADED。** 原因：ResNet18 layer3 = 256 通道 → 8/4/2 bits 压缩比太极端（256:8=32×）。
-Q/R 用 1×1 conv 太简单，无法学会 256 维连续空间到 8 bit 离散的映射。
-**修复方向：** 更多位宽(k=32/64)，或取更浅层特征(layer1=64ch)，或更深的 Q/R 网络(3×3 conv)。
+
+### Phase 10A: Bridge v2 — KL-dominant + 3×3 conv (exp_phase10a_bridge_v2.py)
+
+| k | ratio | agree% | cosine | KL | Δlogit |
+|---|-------|--------|--------|-----|--------|
+| 64 | 4× | 27.0% | 0.726 | 0.74 | 1.89 |
+| 32 | 8× | 30.7% | 0.682 | 0.86 | 2.05 |
+| 16 | 16× | 34.0% | 0.609 | 1.05 | 2.28 |
+| 8 | 32× | 30.3% | 0.588 | 0.98 | 2.19 |
+
+**仍然 DEGRADED。** 3×3 conv + KL-dominant 改善到 27-34%（从 10%），但 binary {0,1} 根本无法表示连续特征幅值/相位。
+
+### Phase 10B: Bridge v3 — Same-domain Teacher + INT/VQ (exp_phase10b_bridge_v3.py) ✅
+
+**突破！** 同域教师（小 CNN 直接训练在 FMNIST，特征 7×7×64）+ 多级量化。
+
+**Route A: INT Token Bridge**
+
+| config | bits/pos | agree% | cosine | KL | drift1 | drift5 | repair |
+|--------|---------|--------|--------|-----|--------|--------|--------|
+| INT8_k32 | 256 | **97.6%** | **0.9634** | 0.004 | 0.010 | 0.092 | +19.5% |
+| INT8_k16 | 128 | 97.4% | 0.9534 | 0.006 | 0.011 | 0.120 | +22.0% |
+| INT4_k32 | 128 | 97.2% | 0.9558 | 0.006 | 0.023 | 0.137 | +16.5% |
+| INT4_k16 | 64 | 96.6% | 0.9455 | 0.011 | 0.024 | 0.184 | +20.5% |
+
+**Route B: VQ Codebook Bridge**
+
+| config | bits/pos | agree% | cosine | KL | drift1 | drift5 | repair |
+|--------|---------|--------|--------|-----|--------|--------|--------|
+| VQ_K256_d16 | 8 | **96.0%** | 0.608 | 0.025 | 0.024 | 0.124 | +22.5% |
+| VQ_K512_d32 | 9 | 95.0% | 0.582 | 0.028 | 0.017 | 0.103 | +17.5% |
+| VQ_K512_d16 | 9 | 94.8% | 0.593 | 0.026 | 0.026 | 0.141 | +18.5% |
+| VQ_K256_d32 | 8 | 94.0% | 0.586 | 0.031 | 0.018 | 0.058 | +21.0% |
+
+**全部 8 配置 agreement ≥ 90%！** Best: INT8_k32 = 97.6%（vs Phase 10 binary 10.3%，提升 +87.3%）。
+**三个关键修复：**
+1. **同域教师**：FMNIST 小 CNN（81.8% acc）vs ImageNet ResNet18（域不匹配）
+2. **多级量化**：INT4/INT8 保留幅值信息 vs binary {0,1} 丢失一切
+3. **VQ codebook**：离散聚类而非二值化 — 8 bits/position 仍达 94-96%
+
+**Repair 全部有效：** +16-22% 修复增益，证明 bridge 后的离散表示可修复。
 
 ### Phase 11: Feature Repairability (exp_phase11_repairability.py)
 
@@ -402,7 +442,7 @@ Repair 让 cycle 更稳定（1.87% → 1.57%）。多轮 cycle 漂移线性增�
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：Phase 12 ✅ → 逆映射 bridge 完成（Phase 10 需迭代）
+### 当前执行阶段：Phase 12 ✅ → Phase 10B bridge 突破 ✅ → 准备生成模型实验
 
 ---
 
@@ -567,9 +607,11 @@ route_c/
 │   ├── exp_phase7_hires_protocol.py # Phase 7: 高分辨率协议观测（已完成）
 │   ├── exp_phase8_int4_quant.py  # Phase 8: INT4 量化 + Gabor/DCT（已完成）
 │   ├── exp_phase9_operator_selector.py # Phase 9: 条件算子调度（已完成）
-│   ├── exp_phase10_feature_translator.py # Phase 10: Feature Translator（需迭代）
-│   ├── exp_phase11_repairability.py  # Phase 11: 特征修复（依赖 Phase 10）
-│   └── exp_phase12_cycle_contract.py # Phase 12: Cycle Contract（已完成 ✅）
+│   ├── exp_phase10_feature_translator.py # Phase 10: Feature Translator（binary baseline）
+│   ├── exp_phase10a_bridge_v2.py      # Phase 10A: KL-dominant + 3×3 conv（仍 DEGRADED）
+│   ├── exp_phase10b_bridge_v3.py      # Phase 10B: Same-domain + INT/VQ（✅ 突破）
+│   ├── exp_phase11_repairability.py   # Phase 11: 特征修复（已完成）
+│   └── exp_phase12_cycle_contract.py  # Phase 12: Cycle Contract（已完成 ✅）
 ├── PARADIGM_REPORT.md          # 范式研究报告（文献+benchmark+实验矩阵）
 ├── DESIGN_DOC.md               # 设计文档 v2.1
 └── CLAUDE.md                   # 本文件
