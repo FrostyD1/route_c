@@ -558,8 +558,8 @@ def _build_learned_energy(model, learned_drope, sigma_sq, cfg, device):
 # INPAINTING MODEL
 # ============================================================================
 
-def train_inpaint_model(model, train_x, cfg, device):
-    """Train amortized inpainting network."""
+def train_inpaint_model(model, train_x, cfg, device, train_y=None):
+    """Train amortized inpainting network with optional L_cls."""
     from inpainting import InpaintTrainer, InpaintConfig
 
     icfg = InpaintConfig(
@@ -569,7 +569,7 @@ def train_inpaint_model(model, train_x, cfg, device):
         hidden=cfg.inpaint_hidden,
     )
     trainer = InpaintTrainer(model, icfg, device)
-    trainer.train(train_x, verbose=True)
+    trainer.train(train_x, train_y=train_y, verbose=True)
     return trainer.inpaint_net
 
 

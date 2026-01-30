@@ -223,10 +223,147 @@ This is the "Transformer killer feature" path: discrete content-addressed routin
 
 ### Output: `outputs/benchmark/results.csv` + pretty-printed console summary
 
-## 5. Narrative Corrections (from reviewer feedback)
+## 5. Detailed Response to Reviewer Feedback
+
+### Point 3 (Reviewer): "Route B 的 latent 层级 — grid vs histogram"
+
+**Our response:** Fully agree. The current v1 InpaintNet operates on grid-latent (7×7×k=8), which is the same representation the classifier consumes (`classifier(z.reshape(B, -1))`). This ensures the inpainted z feeds directly into the classification head without variable mismatch.
+
+The histogram-latent variant (B2) targets the 95.4% log-odds baseline, which uses `spatial_bins(4×4) × vocab(512)` features. This is a different pipeline entirely (VQ tokens → histogram → log-odds), not the learnable encoder pipeline. We defer B2 to future work; v1 focuses on the grid-latent path where MCMC comparison is direct.
+
+**Risk mitigated:** The reviewer correctly identified that pixel-flip MCMC proposals failed because they operated at the wrong abstraction level (pixel vs token). Our InpaintNet operates at the correct level: it predicts z-bits, which is what the classifier consumes.
+
+### Point 5 (Reviewer): "Amortized net 学的是近似 MAP 推断，不是纯粹的 token 语言模型"
+
+**Our response:** Implemented. The InpaintTrainer now includes energy-aware losses:
+```
+L = L_mask + α_core·L_core + α_obs·L_obs
+```
+- `L_core`: local predictor consistency — the composed z (observed + predicted) should satisfy neighborhood rules learned by `local_pred`
+- `L_obs`: reconstruction consistency — `decode(z_composed)` should match the input image
+
+This makes the network learn **constrained MAP inference**: it doesn't just predict likely bits, it predicts bits that are consistent with the Route C energy landscape. The base version (L_mask only) serves as ablation baseline.
+
+### Point 8 (Reviewer): "Route A 作为 B 的模块进入网络，变成离散注意力层"
+
+**Our response:** This is the most important architectural insight. We have designed (but not yet implemented in v1) `InpaintNet_v2` with a learned discrete attention layer:
+
+```
+InpaintNet_v2:
+  Conv(k+1, hidden) → ReLU
+  → LearnedDiscreteAttention(hidden, w, τ)  ← Route A as attention layer
+  → Conv(hidden, k) + skip
+```
+
+The attention layer computes:
+```
+z_out[j] = z_local[j] + Σ_{i∈C(j)} g_{ij} · MLP(z[i])
+```
+where `g_{ij} = σ((τ - w^T(z_i ⊕ z_j)) / T)` is the learned soft gate.
+
+This is the "Transformer killer feature" path: a feedforward network with **content-addressed long-range routing** that is:
+1. Discrete (operates on binary z)
+2. Sparse (O(C·N) not O(N²))
+3. Compile-friendly (XOR + weighted popcount + threshold)
+4. Amortized (single forward pass, no MCMC iteration)
+
+v1 validates that amortized inpainting works at all (Route B alone). v2 adds learned routing inside the network (Route A+B).
+
+## 6. Reviewer v2.1 Feedback — Additional Implementation Points
+
+### §1: L_cls in InpaintNet training — IMPLEMENTED
+Added `gamma_cls * CE(classifier(z_pred), y)` to training loss. This ensures the inpainted z is useful for the downstream classification task, not just "looks-like" bit fill. The classifier is frozen (no gradient back to its weights), so L_cls acts as a task-aware auxiliary head guiding the inpainting network.
+
+### §2: MaskGIT decode — train/test consistency
+- **Training:** Uses logits → BCE (stable gradients)
+- **Inference:** Hard sample `(σ(logit) > 0.5)` for bit predictions
+- **Confidence:** `|σ(logit) - 0.5| × 2` — measures distance from decision boundary
+- **Gap mitigation:** The InpaintNet uses circular padding + residual skip, which reduces distribution shift between soft-training and hard-inference. Temperature annealing in the gate (Route A) provides an additional smooth → hard transition if needed.
+
+### §3: Discrete attention operator — minimum viable definition
+```
+LearnedDiscreteAttention(z, w, τ):
+  For each position j:
+    1. Compute g_{ij} = σ((τ - w^T(z_i ⊕ z_j)) / T) for all i ∈ C(j)
+    2. Select top-K candidates by g_{ij} (K~4-8)
+    3. Value aggregation: v_j = majority_vote(z_{top-K})  [hardware: popcount + compare]
+       OR soft: v_j = Σ g_{ij} · z_i / Σ g_{ij}  [differentiable version for training]
+    4. Output: z_out[j] = z_local[j] + project(v_j)  [residual]
+```
+Hardware path: XOR → weighted popcount → top-K compare → majority vote. No floating-point multiply.
+
+### §4: Route A training objective — task-supervised, not just contrastive
+Current: Contrastive energy ranking (E(z_clean) < E(z_corrupt)).
+**Improvement:** Add task-supervision — backpropagate L_cls through the gate weights w:
+```
+L_A = L_contrastive + λ_task · CE(classifier(z_gated), y)
+```
+This ensures `w` learns "which bits matter for classification routing," not just "which bits minimize energy."
+**Self-supervised augmentation:** Different occlusion views of same image should produce similar gate activations on shared visible regions.
+
+### §5: Calibration metrics for Route B — TODO
+- ECE (Expected Calibration Error) on masked region predictions
+- Per-step acc_after curve (1, 2, 3, 4 iterative steps)
+- Confidence-accuracy correlation plot
+
+### §6: Torus topology ablation — TODO
+- `padding = 'zeros'` vs `padding = 'circular'` in InpaintNet
+- Rotation augmentation during training (D4 group)
+- Both as ablation rows in benchmark suite
+
+## 7. Narrative Corrections (from reviewer feedback)
 
 1. **Mixing time:** Exp09 data shows D-RoPE **increases** sweeps_95% (22-23 vs 20). We do NOT claim "faster mixing." Instead: "D-RoPE changes the energy landscape and proposal distribution, with benefits that depend on occlusion geometry."
 
 2. **LSH optimality claim:** Removed "provably optimal" phrasing. Instead: "Bit-sampling is a standard LSH family for Hamming space; we use it as a simple, zero-overhead candidate generator for binary codes."
 
 3. **Priority:** Route B (amortized) is the primary path for speed and generalization. Route A (learned routing) is auxiliary — its value is as a learnable module, not as an MCMC energy improvement.
+
+4. **B1 vs B2:** B1 (grid-latent 7×7×k) for exp09 world-model comparison. B2 (histogram-latent) targets the 95.4% log-odds baseline and is the faster/more stable path for MNIST. B2 should be implemented soon after v1 validation.
+
+## 8. Mid-Term Benchmark Findings (100 samples/config)
+
+### Raw Results (partial — baseline + drope complete)
+```
+method    | mask       | noise | acc_before → after | Δacc  | Δmse    | ms/sample
+----------|------------|-------|--------------------|-------|---------|----------
+baseline  | center     | clean | 34% → 37%          | +3.0% | -0.010  | 370
+baseline  | center     | noise | 25% → 24%          | -1.0% | -0.009  | 415
+baseline  | random     | clean | 48% → 55%          | +7.0% | -0.012  | 399
+baseline  | random     | noise | 42% → 43%          | +1.0% | -0.014  | 411
+baseline  | multi_hole | clean | 83% → 84%          | +1.0% | -0.001  | 290
+baseline  | multi_hole | noise | 82% → 81%          | -1.0% | +0.004  | 359
+baseline  | stripes    | clean | 78% → 78%          | +0.0% | -0.000  | 78
+baseline  | stripes    | noise | 80% → 80%          | +0.0% | -0.000  | 82
+drope     | center     | clean | 34% → 33%          | -1.0% | -0.007  | 784
+drope     | center     | noise | 25% → 24%          | -1.0% | -0.009  | 891
+drope     | random     | clean | 48% → 54%          | +6.0% | -0.010  | 743
+```
+
+### Key Findings
+
+**Finding 1: Mask geometry determines marginal value of inference.**
+- random (+7%) >> center (+3%) >> multi_hole (+1%) >> stripes (0%)
+- Multi-hole before accuracy is already 83% — small holes don't destroy discriminative structure
+- This means evaluation should focus on center/random/stripes (harder) for Route B validation
+
+**Finding 2: Noise causes MSE↓ but acc↓ — objective misalignment.**
+- center+noise: MSE improves (-0.009) but acc drops (-1%)
+- This is NOT a hyperparameter issue — it's a fundamental mismatch: E_obs (pixel MSE) pushes z toward "smooth average" which lowers MSE but destroys discriminative features
+- **Critical implication:** Route B MUST include L_cls or a semantic observation term, not just pixel MSE
+
+**Finding 3: D-RoPE confirms exp09 pattern.**
+- center: Δacc = -1% (worse than baseline +3%)
+- random: Δacc = +6% (similar to baseline +7%)
+- D-RoPE is 2× slower (784ms vs 370ms) with no accuracy benefit
+- Fixed Hamming gate is not a useful energy term — it needs learned weights or should be dropped
+
+**Finding 4: Speed baseline established.**
+- MCMC: 78-891 ms/sample depending on mask size and method
+- Route B target: <50ms (10-100× improvement)
+
+### Actionable Next Steps (from mid-term analysis)
+1. ✅ **L_cls in InpaintNet** — already implemented, re-run needed
+2. **Discrete observation likelihood** — replace pixel MSE with token/histogram likelihood for E_obs (more Route C native, resistant to pixel-level noise)
+3. **Diagnostic metrics** — per-sample corr(Δmse, Δacc) to quantify objective misalignment
+4. **Center/stripes as primary benchmark** — multi_hole too easy (83% before)
