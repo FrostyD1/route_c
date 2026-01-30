@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+data/
+outputs/
+*.pt
+*.pth
+*.pdf
+.vscode/
