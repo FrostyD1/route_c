@@ -119,6 +119,9 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 43 | **HF_noise ∝ T（Langevin 噪声累积）** | flat: 424→1320(T5→T30); unet: 494→953(T5→T50); 真实=264 | σ schedule 后期应更快衰减 |
 | 44 | **GroupNorm 是收敛机制正解** | flat_norm: delta_u=6.0(稳定), div=0.483(最高), E_gap_H=0.007(最低); tanh: 61(不够), tanhskip: 0.99(过约束div↓) | 稳定中间层特征 > 限制输出范围 |
 | 45 | **σ schedule 对所有模型无效** | 同一模型4种schedule差距<3%; F0c 16配置验证 | HF_noise根因是ADC/DAC管线，非Langevin |
+| 46 | **Evidence clamping 保证零证据泄漏** | 全4种算子 ham_unmasked=0.000, cycle<0.04 | 范式核心：修复合同是架构性保证，非训练依赖 |
+| 47 | **Gen-first 算子通过全部部署门** | Op-B/D: G1 Cost PASS, G2 Contract PASS, G3 ModeSwitch PASS | 范式统一算子：生成训练的算子可直接做修复 |
+| 48 | **Energy-aware 是 Pareto 最优算子** | Op-D: div=0.427(最高), E_gap_H=0.44(最低), 全门PASS; Op-A div=0.03(坍塌) | 能量 hinge + flow 训练 = 统一修复/生成/分类 |
 
 ## 五大计算范式
 
@@ -692,6 +695,54 @@ T=5,10,15,20,30,50 for flat_flow and unet_energy, 共训练一次。
 - HF_noise 根因确认为 ADC/DAC 管线（不是 Langevin 噪声）
 - flat_norm E_gap_H=0.007 是全项目最佳（能量分布几乎精确匹配真实数据）
 
+### C1: Unified Operator Three-Mode Compatibility (exp_c1_operator_modes.py) ✅
+
+flat_norm 跨三种模式（repair/generation/classification）4 种训练策略对比：
+
+**Generation:**
+
+| Operator | viol | div | HF_noise | conn | cycle | delta_u |
+|----------|------|-----|----------|------|-------|---------|
+| Op-A repair | 0.0001 | 0.031 | 271 | 0.560 | 0.014 | 36.0 |
+| Op-B gen | 0.0009 | 0.410 | 972 | 1.000 | 0.045 | 4.4 |
+| Op-C balanced | 0.0001 | 0.134 | 493 | 1.000 | 0.025 | 41.6 |
+| **Op-D energy** | **0.0009** | **0.427** | 883 | 0.999 | 0.049 | 5.8 |
+
+**Repair (center mask):**
+
+| Operator | ham_masked | ham_unmasked | cycle_repair | eobs_drop |
+|----------|-----------|-------------|-------------|-----------|
+| Op-A | 0.316 | **0.000** | 0.031 | 0.010 |
+| Op-B | 0.488 | **0.000** | 0.039 | 0.026 |
+| Op-C | 0.326 | **0.000** | 0.027 | 0.009 |
+| Op-D | 0.495 | **0.000** | 0.040 | 0.028 |
+
+**Classification (conv probe, mixed training):**
+
+| Operator | acc_clean | acc_repair | gap |
+|----------|----------|-----------|-----|
+| Op-A | 0.472 | 0.440 | -0.032 |
+| Op-B | 0.455 | 0.408 | -0.047 |
+| Op-C | 0.467 | 0.412 | -0.055 |
+| Op-D | 0.454 | 0.408 | -0.046 |
+
+**Deployment Gates:**
+
+| Operator | G1 Cost | G2 Contract | G3 ModeSwitch |
+|----------|---------|-------------|---------------|
+| Op-A | FAIL (INT8_div=0.06) | PASS | PASS |
+| **Op-B** | **PASS** | **PASS** | **PASS** |
+| Op-C | FAIL (INT8_div=0.13) | PASS | PASS |
+| **Op-D** | **PASS** | **PASS** | **PASS** |
+
+**核心发现：**
+- **Evidence clamping = 架构性零泄漏**：全4种算子 ham_unmasked=0.000，修复合同不依赖训练
+- **Gen-first 算子可直接做修复**：Op-B/D 无修复训练仍通过全部部署门
+- **Repair-only 训练导致 generation 坍塌**：Op-A div=0.03（mode collapse），Op-C div=0.13
+- **Op-D（energy hinge）是 Pareto 最优**：最高 diversity(0.427), 最低 E_gap_H(0.44)
+- **INT4 activation quant 可行**：Op-B/D INT4_div>0.44（甚至高于 FP32 的 0.41-0.43）
+- HF_noise 仍高（883-972 vs real 254）→ G2-lite 需要解决
+
 ## 范式契约（已固化）
 
 ```json
@@ -720,7 +771,7 @@ T=5,10,15,20,30,50 for flat_flow and unet_energy, 共训练一次。
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：F0c 完成 ✅ → 结论 #44-45 已固化 → Planning: 统一算子实验计划（C1分类+G2协议分层）
+### 当前执行阶段：C1 完成 ✅ → 结论 #46-48 已固化 → G2-lite 运行中（协议密度/分层）
 
 ---
 
@@ -905,7 +956,9 @@ route_c/
 │   ├── exp_gen_cifar10_g4_energy_unet.py # G4: U-Net + E_core + MaskGIT（部分完成）
 │   ├── exp_flow_f0.py               # F0: 统一下降算子 flow（已完成 ✅）
 │   ├── exp_flow_f0b_tsweep.py       # F0b: T-sweep 收敛步数（已完成 ✅）
-│   └── exp_flow_f0c_fixes.py       # F0c: 发散修复+σ schedule（已完成 ✅）
+│   ├── exp_flow_f0c_fixes.py       # F0c: 发散修复+σ schedule（已完成 ✅）
+│   ├── exp_c1_operator_modes.py    # C1: 统一算子三模式兼容性（已完成 ✅）
+│   └── exp_g2_protocol_density.py  # G2-lite: 协议密度/分层（运行中）
 ├── PARADIGM_REPORT.md          # 范式研究报告（文献+benchmark+实验矩阵）
 ├── DESIGN_DOC.md               # 设计文档 v2.1
 └── CLAUDE.md                   # 本文件
