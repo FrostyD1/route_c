@@ -288,3 +288,39 @@ E_obs 残差信号成功分离 center 和 stripes。
 ### E2b-light: Factorized Prior Start
 
 - **Mixture K8 HueVar=0.026** (超过 real 0.020), 首次突破
+
+### X-CORE: 统一先验跨 repair+gen (#63-68)
+
+- E_prior 对 repair 有害(gap↑), 对 gen 有益(HF=259≈real)
+- 两模式需求相反，E_prior 不能统一
+
+### R0: Routing vs Encoder 因果分离 (#69-73)
+
+- Content routing 不改善分类(+0.2%), random 更好(+3.4%)
+- 深度 encoder(5.2×) 不改善分类，反损害 diversity(-18.6%)
+- 分类瓶颈在训练协议(reconstruction-only)，非架构
+
+### O0: Observability Floor (#74-75)
+
+- obs_floor 杀死 dead bits (1.0→0.025) 但 diversity 坍塌(0.47→0.002)
+- 24bit+obs_floor 不如 16bit+obs_floor
+
+### S0: System Identification Diagnostic (#76-77)
+
+- 离散 Gramian 秩 ~94%, 可控秩 99.6% — 系统非真"死"
+- Spectral gap 56万：rank 高但 per-bit influence 极低(~0.02)
+
+### ICC-1: Information Circulation Constraint (#78-81) ✅
+
+| Config | dead% | entropy | Fisher | div | acc | gap | HueVar | cycle |
+|--------|-------|---------|--------|-----|-----|-----|--------|-------|
+| ICC1A base | 1.000 | 0.216 | 0.041 | 0.480 | 0.420 | 0.040 | 0.0009 | 0.035 |
+| ICC1B +entropy | 0.880 | 0.667 | 0.032 | 0.466 | 0.392 | 0.014 | 0.0040 | 0.180 |
+| ICC1C +ctrl_port | 1.000 | 0.209 | 0.021 | 0.464 | 0.432 | 0.014 | 0.0013 | 0.035 |
+| ICC1D +ctrl_full | 0.865 | 0.655 | **2.433** | 0.436 | 0.392 | 0.050 | 0.0024 | 0.150 |
+
+- **条件熵(B)**: HueVar 4.4×, gap -65%, div 仅降3% — 最温和的正则化
+- **ControlPort 无损失(C)**: 无效果，Fisher 反降 — 架构通路不够需损失驱动
+- **ANOVA ctrl_full(D)**: Fisher 59×突破! 但 acc 降, gap 升, cycle 退化
+- **全部 HARD_FAIL**: cycle 退化(0.035→0.15-0.18)破坏协议稳定性
+- **结论**: O+C 约束方向正确但 λ 过强，需保守调优(λ_ent≤0.1, λ_ctrl≤0.3)

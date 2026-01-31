@@ -146,6 +146,10 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 75 | **O0: 24bit+obs_floor 不如 16bit+obs_floor** | O0C dead=0.845(未杀干净), cycle=0.189(崩), conn=0.006 | 带宽增加+obs_floor 干扰更严重 |
 | 76 | **S0: 离散 Jacobian 秩≈94%，非真"死"** | obs rank 483/512(94%), ctrl rank 255/256(99.6%), active=100% | Gramian 秩高但 per-bit influence 极低(~0.02)，spectral gap 56万 |
 | 77 | **S0: 可控性不是瓶颈** | gen_rank 255/256, repair per-image rank 7/8(满秩) | 生成/修复的可达集满秩，单模态问题不在可达性 |
+| 78 | **ICC1: 条件熵改善 HueVar 和 gap** | HueVar 0.0009→0.0040(4.4×), gap 0.040→0.014(-65%), div 仅降 3% | 条件熵打破齐次而不坍塌多样性（vs marginal prior 坍塌50%）|
+| 79 | **ICC1: ControlPort 无损失=无效果** | Fisher 0.041→0.021(反降), 指标与 baseline 无差异 | 架构通路不够，需要 ANOVA 可控性损失驱动分化 |
+| 80 | **ICC1: ANOVA 可控性损失 Fisher 59×** | Fisher 0.041→2.433, dead 1.0→0.865, 但 acc 降, gap 升到 0.050 | C 约束工作但过强：ctrl loss 干扰了 recon quality |
+| 81 | **ICC1: O+C 耦合需要调优** | B(+ent): cycle 0.035→0.180; D(+ctrl_full): cycle→0.150; 全 HARD_FAIL | 熵/可控性改善信息利用率但破坏协议稳定性，λ 需更保守 |
 
 ## 五大计算范式
 
@@ -179,7 +183,7 @@ argmin E(z) subject to z_obs fixed ≅ Hopfield 模式完成 ≅ attention layer
 > **进度更新统一在 PROGRESS.md**，CLAUDE.md 仅保留范式定义、结论表和接口规范。
 > 详细实验数据表已迁移至 PROGRESS.md。
 
-结论汇总见上方 #1-#73。
+结论汇总见上方 #1-#81。
 
 ## 范式契约（已固化）
 
@@ -208,9 +212,9 @@ Phase 0-6（频域路线图）、G1-G4（生成）、F0（Flow）、C1-C2（分�
 详细路线图和结果见 PROGRESS.md。
 
 ### 当前状态
-- 73 条范式结论已固化
-- R0 实验否定了 "content routing" 和 "encoder capacity" 假说
-- 分类瓶颈确认在训练协议（reconstruction-only），非架构
+- 81 条范式结论已固化
+- ICC-1 信息循环约束实验完成：条件熵改善 HueVar/gap，ANOVA Fisher 59×，但协议稳定性退化
+- 下一步：ICC-2 调优 λ_ent/λ_ctrl 保守化，或 S1 对称性实验继续
 
 ## 构建与运行
 
@@ -289,7 +293,7 @@ route_c/
 │   ├── exp_s1_symmetry.py         # S1: 对称性编译损失（部分完成，A0 baseline only）
 │   ├── exp_o0_observability.py    # O0: 可观性升级（已完成 ✅）
 │   ├── exp_s0_system_id.py        # S0: 系统辨识诊断（已完成 ✅）
-│   └── exp_icc1_control_entropy.py # ICC-1: 信息循环约束（运行中）
+│   └── exp_icc1_control_entropy.py # ICC-1: 信息循环约束（已完成 ✅）
 ├── PARADIGM_REPORT.md          # 范式研究报告（文献+benchmark+实验矩阵）
 ├── DESIGN_DOC.md               # 设计文档 v2.1
 └── CLAUDE.md                   # 本文件
