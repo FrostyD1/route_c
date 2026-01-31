@@ -117,6 +117,8 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 41 | **Flat flow T>10 发散（delta_u 指数爆炸）** | delta_u: T10=14.7, T30=5.5M, T50=4.5e13; div: 0.466→0.262(T50坍塌44%) | Flat 无收敛机制, T=10 视觉好纯属甜蜜点 |
 | 42 | **U-Net 完全稳定，delta_u 恒定** | delta_u: T5=2.6→T50=3.4; div: 0.471→0.451(仅-4%); E_gap_H@T20=0.017(最佳) | Energy hinge 赋予 U-Net 真正的动力学稳定性 |
 | 43 | **HF_noise ∝ T（Langevin 噪声累积）** | flat: 424→1320(T5→T30); unet: 494→953(T5→T50); 真实=264 | σ schedule 后期应更快衰减 |
+| 44 | **GroupNorm 是收敛机制正解** | flat_norm: delta_u=6.0(稳定), div=0.483(最高), E_gap_H=0.007(最低); tanh: 61(不够), tanhskip: 0.99(过约束div↓) | 稳定中间层特征 > 限制输出范围 |
+| 45 | **σ schedule 对所有模型无效** | 同一模型4种schedule差距<3%; F0c 16配置验证 | HF_noise根因是ADC/DAC管线，非Langevin |
 
 ## 五大计算范式
 
@@ -672,6 +674,24 @@ T=5,10,15,20,30,50 for flat_flow and unet_energy, 共训练一次。
 - U-Net T=20: E_gap_H=0.017（所有配置最佳），是能量分布最优点
 - 但视觉上 flat T=10 仍然最好看（用户反馈）
 
+### Flow F0c: Fix Divergence + Sigma Schedules (exp_flow_f0c_fixes.py) ✅
+
+3 flat 变体 × 4 σ schedules + U-Net × 4 σ schedules = 16 configs, T=20
+
+| Model | delta_u | div | HF_noi | E_gap_H | conn | 训练BCE |
+|-------|---------|-----|--------|---------|------|---------|
+| flat_tanh | 61 | 0.446 | 1016 | 0.556 | 0.994 | 0.184 |
+| **flat_norm** | **6.0** | **0.481** | 836 | **0.007** | 0.854 | **0.179** |
+| flat_tanhskip | **0.99** | 0.410 | 804 | 0.635 | 0.999 | 0.238 |
+| unet_energy | 3.3 | 0.462 | 848 | 0.352 | 0.996 | — |
+
+**核心发现：**
+- **flat_norm（GroupNorm）是正解**：不限制输出，稳定中间层 → delta_u=6.0 自然收敛
+- flat_tanh 不够（delta_u=61），flat_tanhskip 过约束（div↓到 0.41，BCE 降不下来）
+- **σ schedule 完全无效**：4 种 schedule 在同一模型上差距 <3%
+- HF_noise 根因确认为 ADC/DAC 管线（不是 Langevin 噪声）
+- flat_norm E_gap_H=0.007 是全项目最佳（能量分布几乎精确匹配真实数据）
+
 ## 范式契约（已固化）
 
 ```json
@@ -700,7 +720,7 @@ T=5,10,15,20,30,50 for flat_flow and unet_energy, 共训练一次。
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：F0b T-Sweep 完成 ✅ → 结论 #41-43 已固化 → 下一步: F0c 修复 Langevin schedule + 测试 flat 加收敛机制
+### 当前执行阶段：F0c 完成 ✅ → 结论 #44-45 已固化 → Planning: 统一算子实验计划（C1分类+G2协议分层）
 
 ---
 
@@ -884,7 +904,8 @@ route_c/
 │   ├── exp_gen_cifar10_g3.py        # G3: 16×16×16 stride-2 + regression denoiser（已完成 ✅）
 │   ├── exp_gen_cifar10_g4_energy_unet.py # G4: U-Net + E_core + MaskGIT（部分完成）
 │   ├── exp_flow_f0.py               # F0: 统一下降算子 flow（已完成 ✅）
-│   └── exp_flow_f0b_tsweep.py       # F0b: T-sweep 收敛步数（已完成 ✅）
+│   ├── exp_flow_f0b_tsweep.py       # F0b: T-sweep 收敛步数（已完成 ✅）
+│   └── exp_flow_f0c_fixes.py       # F0c: 发散修复+σ schedule（已完成 ✅）
 ├── PARADIGM_REPORT.md          # 范式研究报告（文献+benchmark+实验矩阵）
 ├── DESIGN_DOC.md               # 设计文档 v2.1
 └── CLAUDE.md                   # 本文件
