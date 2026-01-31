@@ -142,6 +142,10 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 71 | **深度 encoder（5.2×参数）不改善分类** | 0.416≈0.414, 834K vs 159K 无差异 | encoder 容量非瓶颈 |
 | 72 | **深度 encoder 损害生成多样性（-18.6%）** | div 0.457→0.372, 过拟合导致 z 坍塌 | 小数据过参数化有害 |
 | 73 | **分类瓶颈在训练协议而非架构** | 5 架构变体 acc 41-45%(spread 3.6%), 远低于 TinyCNN 61% | reconstruction-only z 的固有限制 |
+| 74 | **O0: obs_floor 杀死 dead bits 但坍塌 diversity** | dead 1.0→0.025(-97.5%), ham_mask 0.43→0.04, 但 div 0.47→0.002, acc 0.45→0.29 | O 约束单独不够，需配合 C 约束(ControlPort) |
+| 75 | **O0: 24bit+obs_floor 不如 16bit+obs_floor** | O0C dead=0.845(未杀干净), cycle=0.189(崩), conn=0.006 | 带宽增加+obs_floor 干扰更严重 |
+| 76 | **S0: 离散 Jacobian 秩≈94%，非真"死"** | obs rank 483/512(94%), ctrl rank 255/256(99.6%), active=100% | Gramian 秩高但 per-bit influence 极低(~0.02)，spectral gap 56万 |
+| 77 | **S0: 可控性不是瓶颈** | gen_rank 255/256, repair per-image rank 7/8(满秩) | 生成/修复的可达集满秩，单模态问题不在可达性 |
 
 ## 五大计算范式
 
@@ -278,10 +282,14 @@ route_c/
 │   ├── exp_c1_operator_modes.py    # C1: 统一算子三模式兼容性（已完成 ✅）
 │   ├── exp_g2_protocol_density.py  # G2-lite: 协议密度/分层（已完成 ✅）
 │   ├── exp_g1_dt_schedule.py      # G1-lite: dt/T/schedule sweep（已完成 ✅）
-│   ├── exp_e2b_combined.py        # E2b: 24bit + spatial_cov combined（运行中）
-│   ├── exp_e2b_factorized_prior.py # E2b-light: factorized prior start（待跑）
+│   ├── exp_e2b_combined.py        # E2b: 24bit + spatial_cov combined（已完成 ✅）
+│   ├── exp_e2b_factorized_prior.py # E2b-light: factorized prior start（已完成 ✅）
 │   ├── exp_e2a_global_prior.py    # E2a: 全局先验能量（已完成 ✅）
-│   └── exp_r0_routing_encoder.py  # R0: Routing vs Encoder 因果分离（已完成 ✅）
+│   ├── exp_r0_routing_encoder.py  # R0: Routing vs Encoder 因果分离（已完成 ✅）
+│   ├── exp_s1_symmetry.py         # S1: 对称性编译损失（部分完成，A0 baseline only）
+│   ├── exp_o0_observability.py    # O0: 可观性升级（已完成 ✅）
+│   ├── exp_s0_system_id.py        # S0: 系统辨识诊断（已完成 ✅）
+│   └── exp_icc1_control_entropy.py # ICC-1: 信息循环约束（运行中）
 ├── PARADIGM_REPORT.md          # 范式研究报告（文献+benchmark+实验矩阵）
 ├── DESIGN_DOC.md               # 设计文档 v2.1
 └── CLAUDE.md                   # 本文件
