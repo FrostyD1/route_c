@@ -155,6 +155,9 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 84 | **ICC2: Spectral+aug 组合不如 spectral 单独** | D(0.430) < B(0.452), 但 dead 最好(0.750), gap 最好(0.036) | aug-inv 干扰 spectral 学习 |
 | 85 | **ICC2: VICReg 恢复组合精度** | E(0.452)=B(0.452), HF_noise=84(过平滑) | VICReg 补偿 aug-inv 干扰 |
 | 86 | **ICC2: Spectral 改善但不解决根本瓶颈** | ICC1最佳0.420→ICC2最佳0.452(+3.2%), 仍远低于60% | 瓶颈转移到训练协议/数据量/encoder容量 |
+| 87 | **ICC3: ResBlock+10K+60ep 达到 61.8%** | 匹配 supervised TinyCNN(61.6%), 纯重建训练无标签 | 数据+容量+训练是根本，不是 regularization |
+| 88 | **ICC3: Spectral eq 在大模型有害(-3~-6%)** | 小模型+3.8%, 大模型cond 3→79K, div 0.45→0.19 | 模型够大时 recon loss 自然找到好编码 |
+| 89 | **ICC3: Dead bits≠无信息（空间组合编码）** | 100% dead bits 但 61.8% acc; 单bit翻转=0影响 | encoder 用 bit 组合模式，诊断需测空间模式 |
 
 ## 五大计算范式
 
@@ -298,7 +301,9 @@ route_c/
 │   ├── exp_s1_symmetry.py         # S1: 对称性编译损失（部分完成，A0 baseline only）
 │   ├── exp_o0_observability.py    # O0: 可观性升级（已完成 ✅）
 │   ├── exp_s0_system_id.py        # S0: 系统辨识诊断（已完成 ✅）
-│   └── exp_icc1_control_entropy.py # ICC-1: 信息循环约束（已完成 ✅）
+│   ├── exp_icc1_control_entropy.py # ICC-1: 信息循环约束（已完成 ✅）
+│   ├── exp_icc2_spectral.py       # ICC-2: spectral eq+aug inv（已完成 ✅）
+│   └── exp_icc3_maxpush.py        # ICC-3: maximum push（已完成 ✅ 61.8%!）
 ├── PARADIGM_REPORT.md          # 范式研究报告（文献+benchmark+实验矩阵）
 ├── DESIGN_DOC.md               # 设计文档 v2.1
 └── CLAUDE.md                   # 本文件

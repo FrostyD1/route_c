@@ -94,7 +94,7 @@ class ResBlockEncoder(nn.Module):
         return z, logits
 
     def set_temperature(self, tau):
-        self.q.set_tau(tau)
+        self.q.set_temperature(tau)
 
 
 class ResBlockDecoder(nn.Module):

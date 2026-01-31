@@ -146,7 +146,7 @@ device bug 崩溃，用户决定跳过直接跑 X-CORE。
 - [x] **X-CORE: 统一 E_prior** (#63-68) ✅
 - [x] **R0: Routing vs Encoder Capacity** (#69-73) ✅
 - [x] **ICC-2: Spectral Equalization** (#82-86) ✅
-- [ ] ICC-3: ResBlock + Spectral + Scale-up (next)
+- [x] **ICC-3: Maximum Classification Push** (#87-89) ✅ — **61.8% 达标!**
 - [ ] Git push 所有结果 + 图片
 
 ---
@@ -327,6 +327,10 @@ E_obs 残差信号成功分离 center 和 stripes。
 - **全部 HARD_FAIL**: cycle 退化(0.035→0.15-0.18)破坏协议稳定性
 - **结论**: O+C 约束方向正确但 λ 过强，需保守调优(λ_ent≤0.1, λ_ctrl≤0.3)
 
+---
+
+## 2026-02-01
+
 ### ICC-2: Spectral Equalization + Augmentation Invariance (#82-86) ✅
 
 | Config | cond | dead% | entropy | acc_clean | gap | div | HF_noise | cycle |
@@ -358,3 +362,27 @@ E_obs 残差信号成功分离 center 和 stripes。
 - 从 ICC1→ICC2 最佳: 0.420→0.452（+3.2%）
 - 仍远低于 60% 目标，瓶颈从 "dead bits" 转移到 "训练协议/数据量"
 - 下一步: 组合 spectral eq + ResBlock encoder + 更多数据
+
+### ICC-3: Maximum Classification Push (#87-89) ✅ — 61.8% 达标!
+
+**核心实验：** ResBlock encoder/decoder (993K params) + 10K 训练数据 + 60 epochs，4 configs。
+
+| Config | ConvProbe | DeepProbe | gap_c | gap_d | dead% | div | HF_noise |
+|--------|-----------|-----------|-------|-------|-------|-----|----------|
+| **A baseline** | **0.618** | 0.600 | 0.075 | 0.056 | 1.000 | 0.453 | 99 |
+| B +spectral | 0.586 | 0.576 | 0.055 | 0.050 | 0.005 | 0.185 | 22 |
+| C +spec+aug | 0.558 | 0.584 | 0.061 | 0.057 | 0.175 | 0.216 | 106 |
+| D +full | 0.575 | 0.598 | 0.047 | 0.050 | 0.070 | 0.382 | 145 |
+
+**结论 #87: ResBlock + 10K data + 60 epochs 达到 61.8%，匹配 supervised TinyCNN (61.6%)**
+- 纯 reconstruction-based 训练（无标签）的离散 z-code 携带足够语义信息
+- 突破因素是数据量 (3K→10K) + encoder 容量 (159K→529K) + 训练时长 (40→60 epochs)
+- 不需要任何 regularization
+
+**结论 #88: Spectral eq 在大规模模型上有害 (-3.2% to -6.0%)**
+- 在小 Encoder16 (16×16×16) 上有效 (+3.8%, ICC-2)
+- 在 ResBlock (32×32×16) 上过强：cond_number 3.2→79K, div 0.45→0.19
+
+**结论 #89: Dead bits 不等于无信息（空间组合编码）**
+- Config A: 100% dead bits 但 61.8% 分类精度
+- Encoder 使用空间模式（bit 组合）编码，不是单个 bit
