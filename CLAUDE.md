@@ -108,6 +108,8 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 32 | **Staging 实现完美 repair 稳定但牺牲精度** | sem gap=0.000, dual gap=0.2% vs flat gap=7.5%；但 clean -6.2% | 准确度-稳定性权衡：结构隔离有效但有代价 |
 | 33 | **G1: 带宽大幅改善生成多样性和一致性** | div 0.201→0.342(+70%), viol 0.381→0.290(-24%), HF_coh接近真实；但HF_noise爆炸(136→1838) | 生成容量：16384 bits 解锁多样性，但32×32 grid引入噪声 |
 | 34 | **G2: 频率带调度采样改善低频结构** | E_gap_low 0.335→0.181(近半), div+12%, HF_noise 136→187(更接近264) | 生成采样：粗到细频率调度有效，DCT空间位置代理足够 |
+| 35 | **G3: 16×16×16 stride-2 最优生成z规格** | E_gap_low=0.109(最低), HF_noise=187(可控), viol=0.322 | stride-2空间抽象+高channel = 最佳平衡，1:1 mapping (32×32) 不可取 |
+| 36 | **Regression denoiser 赢 HF_noise** | HF_noise=297(最接近真实264), div=0.304(最高), viol=0.301(最低) | 连续残差预测比二值分类更适合生成,但仍无细腻纹理 |
 
 ## 五大计算范式
 
