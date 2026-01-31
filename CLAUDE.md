@@ -101,6 +101,8 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 25 | **去噪编译生成最优** | violation 0.178（最低），cycle 0.012（最低） | 范式生成：sleep-phase 编译可做无条件采样 |
 | 26 | **频率证据改善生成连贯性** | conn 0.335→0.997, HF_coh 接近真实, Gate PASS | 观测几何升级：频率是证据通道不是 task loss |
 | 27 | **CIFAR-10 彩色生成可行** | freq_full_ms HF_noise 最接近真实(295 vs 264) | 范式可扩展到 RGB，离散核通用 |
+| 28 | **Repair 是分布迁移，非语义破坏** | train_repair→test_repair 40.6% vs train_clean→test_repair 16.2% | 范式四：可写协议保持语义 |
+| 29 | **混合训练恢复 repair 读出** | mixed probe: clean 44.9% / repair 40.7% (Δ=-4.2%) | 范式三：编译覆盖域需包含 repair 分布 |
 
 ## 五大计算范式
 
@@ -503,6 +505,50 @@ Denoise compilation 在 CIFAR-10 上也赢（violation 最低），freq 训练�
 freq_full 给出最高 diversity(0.225)。Gate 全 PASS。
 mid/high energy gap 仍 >0.93——16×16×8 对 RGB 的表达容量瓶颈。
 
+### CIFAR-10 Classification Probe v1 (exp_cifar10_classify.py)
+
+| Config | Linear | Conv | Notes |
+|--------|--------|------|-------|
+| **Baselines** | | | |
+| TinyCNN (244K params) | — | 61.6% | supervised |
+| ResNet18 (11.2M params) | — | 64.6% | supervised |
+| **Z1 32×32×8 (8192 bits)** | | | |
+| base_norepair | 32.4% | **45.1%** | |
+| base_repair | 19.6% | 16.9% | repair crashes probe |
+| freq_norepair | 33.1% | 44.7% | freq ≈ no effect |
+| freq_repair | 17.6% | 15.2% | repair crashes probe |
+| **Z2 16×16×16 (4096 bits)** | | | |
+| base_norepair | 32.4% | **46.0%** | |
+| base_repair | 22.8% | 27.4% | Z2 repair less damaging |
+
+**Conv probe >> Linear (+13%)**：z 是局部场，语义以空间关系存在。
+**Z1 ≈ Z2**：容量不是瓶颈（8192 vs 4096 bits），训练几何决定承载内容。
+**Freq 无效果**：频率约束改善观测几何/纹理，不改善语义可分性。
+**Repair 崩溃**：probe 在 clean-z 训练、repaired-z 测试 → 分布不匹配。
+
+### CIFAR-10 Classification Probe v2 — Semantic Stability (exp_cifar10_classify_v2.py) ✅
+
+**Intervention stability:** Repair 完全局部化（change ratio = ∞，unmasked Hamming = 0.000）
+
+| probe | train_on | test_clean | test_repair | Δ |
+|-------|----------|-----------|-------------|-----|
+| conv | clean | **0.448** | 0.162 | -0.286 |
+| conv | repaired | 0.304 | **0.406** | +0.102 |
+| conv | **mixed** | **0.449** | **0.407** | **-0.042** |
+| hier | clean | 0.451 | 0.203 | -0.248 |
+| hier | repaired | 0.313 | 0.400 | +0.087 |
+| hier | **mixed** | 0.419 | **0.401** | **-0.018** |
+| sem | clean | 0.279 | 0.182 | -0.097 |
+| sem | mixed | 0.263 | 0.286 | +0.023 |
+| linear | clean | 0.340 | 0.168 | -0.172 |
+| linear | mixed | 0.308 | 0.303 | -0.005 |
+
+**核心发现：Repair 是分布迁移（distribution shift），不是语义破坏（semantic destruction）。**
+- train_repair → test_repair = 40.6%（vs train_clean → test_repair = 16.2%，恢复 +24.4%）
+- **Mixed training 是最优解**：clean 44.9% / repair 40.7%，两端都不塌
+- Hier_mixed: Δ = -1.8%，几乎 repair-stable
+- z_sem（global pool）单独只有 27.9%——语义需要空间聚合才能读出
+
 ## 范式契约（已固化）
 
 ```json
@@ -531,7 +577,7 @@ mid/high energy gap 仍 >0.93——16×16×8 对 RGB 的表达容量瓶颈。
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：Freq-as-Evidence A2 全完成 ✅ (FMNIST + CIFAR-10) → 结论 #26-27 已固化
+### 当前执行阶段：CIFAR-10 Classification Probe v2 完成 ✅ → 结论 #28-29 已固化 (Repair = distribution shift, mixed training fixes it)
 
 ---
 
@@ -700,7 +746,14 @@ route_c/
 │   ├── exp_phase10a_bridge_v2.py      # Phase 10A: KL-dominant + 3×3 conv（仍 DEGRADED）
 │   ├── exp_phase10b_bridge_v3.py      # Phase 10B: Same-domain + INT/VQ（✅ 突破）
 │   ├── exp_phase11_repairability.py   # Phase 11: 特征修复（已完成）
-│   └── exp_phase12_cycle_contract.py  # Phase 12: Cycle Contract（已完成 ✅）
+│   ├── exp_phase12_cycle_contract.py  # Phase 12: Cycle Contract（已完成 ✅）
+│   ├── exp_gen_unconditional.py       # 无条件生成（已完成）
+│   ├── exp_gen_freq_*.py              # 频率证据生成 A1/A2（已完成）
+│   ├── exp_gen_cifar10_a2.py          # CIFAR-10 A2 生成（已完成）
+│   ├── exp_gen_cifar10_bw_32x32x16.py # 32×32×16 带宽测试
+│   ├── exp_gen_cifar10_int4_v2.py     # INT4 token 4-denoiser 对比
+│   ├── exp_cifar10_classify.py        # CIFAR-10 分类 Probe v1（已完成）
+│   └── exp_cifar10_classify_v2.py     # CIFAR-10 分类 Probe v2 语义稳定性（已完成 ✅）
 ├── PARADIGM_REPORT.md          # 范式研究报告（文献+benchmark+实验矩阵）
 ├── DESIGN_DOC.md               # 设计文档 v2.1
 └── CLAUDE.md                   # 本文件
