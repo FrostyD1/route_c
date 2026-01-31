@@ -103,6 +103,9 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 27 | **CIFAR-10 彩色生成可行** | freq_full_ms HF_noise 最接近真实(295 vs 264) | 范式可扩展到 RGB，离散核通用 |
 | 28 | **Repair 是分布迁移，非语义破坏** | train_repair→test_repair 40.6% vs train_clean→test_repair 16.2% | 范式四：可写协议保持语义 |
 | 29 | **混合训练恢复 repair 读出** | mixed probe: clean 44.9% / repair 40.7% (Δ=-4.2%) | 范式三：编译覆盖域需包含 repair 分布 |
+| 30 | **带宽有帮助但非主瓶颈** | 32×32×16=51.0% vs 32×32×8=49.5%（spread 仅2.8%） | 协议容量：更多 bits 有增益但需配合更强 encoder |
+| 31 | **ResBlock encoder 提升分类至 51.5%** | flat_resblock=51.5% vs plain_flat=45.1%（+6.4%） | 感受野/深度对协议翻译层很重要 |
+| 32 | **Staging 实现完美 repair 稳定但牺牲精度** | sem gap=0.000, dual gap=0.2% vs flat gap=7.5%；但 clean -6.2% | 准确度-稳定性权衡：结构隔离有效但有代价 |
 
 ## 五大计算范式
 
@@ -549,6 +552,37 @@ mid/high energy gap 仍 >0.93——16×16×8 对 RGB 的表达容量瓶颈。
 - Hier_mixed: Δ = -1.8%，几乎 repair-stable
 - z_sem（global pool）单独只有 27.9%——语义需要空间聚合才能读出
 
+### CIFAR-10 C1: Bandwidth Sweep (exp_cifar10_bandwidth.py)
+
+| Config | Bits | Conv Probe | Linear Probe | MSE | Spatial Corr |
+|--------|------|-----------|-------------|-----|-------------|
+| Z-A 16×16×16 | 4096 | 48.2% | 34.1% | 0.0022 | 0.724 |
+| Z-B 32×32×8 | 8192 | 49.5% | 32.0% | 0.0016 | 0.819 |
+| **Z-C 32×32×16** | **16384** | **51.0%** | **36.1%** | 0.0017 | 0.831 |
+| Z-D 8×8×64 | 4096 | 48.2% | **38.4%** | 0.0028 | 0.651 |
+
+**诊断：MIXED** — 带宽有帮助（spread=2.8%），但不足以单独突破 55%。
+Z-D（极端下采样）linear 最高（38.4%）但 conv 不突出 — 语义集中但空间信息损失。
+所有通道利用率 100%，entropy 健康 (0.65-0.68)。
+
+### CIFAR-10 C2: Staged ResBlock Encoder + VICReg (exp_cifar10_staged_encoder.py)
+
+| Config | Clean | Repair | Gap | Notes |
+|--------|-------|--------|-----|-------|
+| **flat_resblock** | **51.5%** | **44.0%** | 7.5% | ResBlock baseline (524K params) |
+| staged_sem_only | 40.3% | 40.3% | **0.0%** | z_sem perfectly repair-stable |
+| staged_tex_only | 45.3% | 42.3% | 3.0% | z_tex at 16×16 |
+| staged_dual | 44.2% | 44.0% | **0.2%** | dual bus near-zero gap |
+| vicreg_sem | 42.8% | 42.8% | **0.0%** | VICReg +2.5% on z_sem |
+| vicreg_dual | 44.1% | 43.2% | 0.9% | VICReg dual |
+
+**核心发现：精度-稳定性权衡 (accuracy-stability tradeoff)。**
+- Flat ResBlock 赢 clean accuracy (51.5%) 但 gap=7.5%
+- Staged 双总线实现 gap≈0% 但 clean 降至 40-45%
+- VICReg 在 z_sem 上有 +2.5% 增益（40.3%→42.8%），证明自监督信号有效但有限
+- z_sem **完美 repair-stable by design** (gap=0.000) — 结构隔离有效
+- 下一步方向：在 flat ResBlock 上做 mixed probe 可同时获得 51.5% clean + 更小 gap
+
 ## 范式契约（已固化）
 
 ```json
@@ -577,7 +611,7 @@ mid/high energy gap 仍 >0.93——16×16×8 对 RGB 的表达容量瓶颈。
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：CIFAR-10 Classification Probe v2 完成 ✅ → 结论 #28-29 已固化 (Repair = distribution shift, mixed training fixes it)
+### 当前执行阶段：CIFAR-10 分类线 C1+C2 完成 ✅ → 结论 #30-32 已固化 → 准备进入生成线改进
 
 ---
 
@@ -753,7 +787,10 @@ route_c/
 │   ├── exp_gen_cifar10_bw_32x32x16.py # 32×32×16 带宽测试
 │   ├── exp_gen_cifar10_int4_v2.py     # INT4 token 4-denoiser 对比
 │   ├── exp_cifar10_classify.py        # CIFAR-10 分类 Probe v1（已完成）
-│   └── exp_cifar10_classify_v2.py     # CIFAR-10 分类 Probe v2 语义稳定性（已完成 ✅）
+│   ├── exp_cifar10_classify_v2.py     # CIFAR-10 分类 Probe v2 语义稳定性（已完成 ✅）
+│   ├── exp_cifar10_classify_v3.py     # CIFAR-10 分类 v3 双总线+对比（部分完成）
+│   ├── exp_cifar10_bandwidth.py       # C1: 带宽扫描 4 configs（已完成 ✅）
+│   └── exp_cifar10_staged_encoder.py  # C2: Staged ResBlock + VICReg（已完成 ✅）
 ├── PARADIGM_REPORT.md          # 范式研究报告（文献+benchmark+实验矩阵）
 ├── DESIGN_DOC.md               # 设计文档 v2.1
 └── CLAUDE.md                   # 本文件
