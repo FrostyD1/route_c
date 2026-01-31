@@ -132,6 +132,9 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 56 | **24-bit+spatial_cov_0.3 是组合最优** | HF_noise=204(real=264), ColorKL=0.98(最佳); 两修复互补 | 带宽+先验组合有效 |
 | 57 | **高 λ 先验摧毁生成质量** | λ=1.0: HF_noise=514, ColorKL=10; λ=3.0: div=0.15(坍塌), ColorKL=21 | 先验强度必须极保守（λ≤0.3） |
 | 58 | **HueVar 仍未解决（需更强的非齐次机制）** | 所有E2b配置 HueVar<0.003(real=0.019); spatial_cov 改善 ColorKL 但不改善像素级色调方差 | 当前先验在协方差层面工作，不在像素纹理层面 |
+| 59 | **层级 z 分离：z_sem 完全 repair-stable** | z_sem gap=0.000, z_tex gap=0.049; dual gap=0.013 | 语义层天然稳定，纹理层承载 repair 风险 |
+| 60 | **Contrastive 对 z_sem 有效（+2.7%）但低于 z_tex 天花板** | sem_only 37.3%, tex_only 47.9%, dual_contra 42.6% | z_tex 空间场仍是主要信息载体 |
+| 61 | **层级结构不提升分类精度（+0.3%）** | hier_tex_only 47.9% vs flat 47.6%, 几乎无差 | 当前 ADC 瓶颈下层级不增加信息量 |
 
 ## 五大计算范式
 
@@ -609,6 +612,24 @@ Z-D（极端下采样）linear 最高（38.4%）但 conv 不突出 — 语义集
 - z_sem **完美 repair-stable by design** (gap=0.000) — 结构隔离有效
 - 下一步方向：在 flat ResBlock 上做 mixed probe 可同时获得 51.5% clean + 更小 gap
 
+### CIFAR-10 Classification v3: Hierarchical Protocol + Semantic Carrier (exp_cifar10_classify_v3.py) ✅
+
+| Config | Clean | Repair | Gap | Notes |
+|--------|-------|--------|-----|-------|
+| **flat_baseline** | **0.476** | 0.417 | 0.059 | 32×32×8, mixed probe |
+| hier_sem_only | 0.346 | 0.346 | **0.000** | 8×8×16, perfectly stable |
+| **hier_tex_only** | **0.479** | **0.430** | 0.049 | 32×32×8 tex channel |
+| hier_dual | 0.388 | 0.401 | 0.013 | tex+sem combined |
+| contra_sem_only | 0.373 | 0.373 | **0.000** | +SimCLR on z_sem |
+| contra_dual | 0.426 | 0.418 | 0.008 | +SimCLR on dual |
+
+**核心发现 (#59-61):**
+- **z_sem 完全 repair-stable** (gap=0.000)——语义层天然不受 repair 干扰
+- **Contrastive 对 z_sem 有效** (+2.7%: 34.6→37.3%)，对 dual 更明显 (+3.8%: 38.8→42.6%)
+- **层级不提升精度** (hier_tex_only 47.9% ≈ flat 47.6%)——ADC 瓶颈下层级不增加信息量
+- **Dual gap 极小** (0.013)——z_sem 稀释了 z_tex 的 repair gap
+- 与 C2 一致：z_sem repair-stable by design，精度-稳定性权衡确认
+
 ### CIFAR-10 Generation G1+G2: Bandwidth + Freq-Band Sampling (exp_gen_cifar10_g1g2.py)
 
 | config | bits | viol | div | cycle | conn | HF_coh | HF_noi | Eg_L | Eg_M |
@@ -879,7 +900,7 @@ flat_norm 跨三种模式（repair/generation/classification）4 种训练策略
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：E2b 完成 ✅ → 结论 #56-58 已固化 → CIFAR-10 Classification v3 进行中
+### 当前执行阶段：v3 Classify 完成 ✅ → 结论 #59-61 已固化 → E2b-light 运行中
 
 ---
 

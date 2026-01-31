@@ -327,8 +327,8 @@ def main():
                                    trajectory=traj)
 
         hv = compute_hue_var(x_gen)
-        mmd = compute_z_mmd(z_gen, z_train)
-        mkl = compute_marginal_kl(z_gen, z_train)
+        mmd = compute_z_mmd(z_gen.cpu(), z_train.cpu())
+        mkl = compute_marginal_kl(z_gen.cpu(), z_train.cpu())
 
         metrics['hue_var'] = hv['hue_var']
         metrics['z_mmd'] = mmd
