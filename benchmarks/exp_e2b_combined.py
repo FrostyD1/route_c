@@ -53,8 +53,38 @@ from exp_g2_protocol_density import (
 
 # Import from E2a (priors + metrics)
 from exp_e2a_global_prior import (
-    SpatialCovPrior, hue_variance, color_kl, activation_rate_kl
+    CovariancePrior as SpatialCovPrior,
+    compute_hue_var,
+    compute_marginal_kl
 )
+
+
+def hue_variance(x):
+    """Wrapper: return scalar hue_var from compute_hue_var dict."""
+    result = compute_hue_var(x)
+    return result['hue_var']
+
+
+def color_kl(x_gen, x_real):
+    """KL divergence of per-channel mean distributions."""
+    gen_means = x_gen.mean(dim=(2, 3))   # [N, C]
+    real_means = x_real.mean(dim=(2, 3))  # [N, C]
+    kl_total = 0.0
+    for c in range(gen_means.shape[1]):
+        g_hist = torch.histc(gen_means[:, c], bins=50, min=0, max=1) + 1e-8
+        r_hist = torch.histc(real_means[:, c], bins=50, min=0, max=1) + 1e-8
+        g_hist = g_hist / g_hist.sum()
+        r_hist = r_hist / r_hist.sum()
+        kl_total += (g_hist * (g_hist / r_hist).log()).sum().item()
+    return kl_total / gen_means.shape[1]
+
+
+def activation_rate_kl(z_gen, z_data):
+    """KL divergence of per-position activation rates."""
+    p_gen = z_gen.float().mean(dim=0).clamp(1e-6, 1 - 1e-6)
+    p_data = z_data.float().mean(dim=0).clamp(1e-6, 1 - 1e-6)
+    kl = p_data * (p_data / p_gen).log() + (1 - p_data) * ((1 - p_data) / (1 - p_gen)).log()
+    return kl.mean().item()
 
 
 # ============================================================================
@@ -75,7 +105,7 @@ def sample_flow_combined(step_fn, e_core, global_prior, n, K, H, W, device,
         e_grad_core = compute_e_core_grad(e_core, u)
 
         if global_prior is not None and lambda_global > 0:
-            e_grad_global = global_prior.energy_grad(u)
+            e_grad_global = global_prior.grad(u, device)
             lambda_t = lambda_global * (0.3 + 0.7 * t_frac)
             e_grad = e_grad_core + lambda_t * e_grad_global
         else:
@@ -176,8 +206,8 @@ def main():
         # Build spatial covariance prior
         global_prior = None
         if lam > 0:
-            global_prior = SpatialCovPrior(z_data, rank=16).to(device)
-            print(f"    Spatial cov prior: E(real)={global_prior.energy(z_data[:100].to(device)):.4f}")
+            global_prior = SpatialCovPrior(z_data)
+            print(f"    Spatial cov prior built")
 
         # Generate
         torch.manual_seed(args.seed + 100)

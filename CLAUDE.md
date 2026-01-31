@@ -128,6 +128,7 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 52 | **Spatial covariance 是正确的全局先验** | HueVar 0.044→2.785(real=2.44), ColorKL -73%, act_KL -80% | 范式：缺件是"方差匹配"不是"均值匹配" |
 | 53 | **Marginal prior 有害（推向均值=更齐次）** | div 0.47→0.21, HueVar 0.044→0.010; 匹配均值 ≠ 匹配分布 | 全局先验必须保留方差结构 |
 | 54 | **Channel-only prior 完全无效** | 所有指标 Δ<0.001, 与 baseline 无差异 | 缺的是空间非齐次性，不是通道统计 |
+| 55 | **dt/T/schedule 调优改善 violation 但恶化 HF_noise** | warmup best viol=0.0034, 但 HF_noise=1165(real=234); 更多步/更大步长→更齐次 | 采样超参不解决结构问题 |
 
 ## 五大计算范式
 
@@ -789,6 +790,46 @@ flat_norm 跨三种模式（repair/generation/classification）4 种训练策略
 - **代价**：spatial_cov div 降 34%（0.47→0.31），HF_noise 升 36%（399→542）——prior 强度 vs 自由度权衡
 - **诊断意义**：缺的是"方差/协方差匹配"不是"均值匹配"，空间非齐次性是关键
 
+### G1-lite: dt/T/Schedule Sweep (exp_g1_dt_schedule.py) ✅
+
+**Phase 1: dt sweep (T=20, real HF_noise=234)**
+
+| dt | violation | diversity | conn | HF_noise | delta_u |
+|----|-----------|-----------|------|----------|---------|
+| 0.10 | 0.0092 | 0.469 | 0.978 | 510 | 2.2 |
+| 0.25 | 0.0059 | 0.471 | 0.991 | 604 | 2.6 |
+| 0.50 | 0.0049 | 0.457 | 0.997 | 749 | 3.6 |
+| 1.00 | 0.0038 | 0.442 | 0.995 | 911 | 7.3 |
+
+**Phase 2: T sweep (dt=1.0)**
+
+| T | violation | diversity | HF_noise | delta_u |
+|---|-----------|-----------|----------|---------|
+| 5 | 0.0097 | 0.460 | 507 | 2.1 |
+| 10 | 0.0058 | 0.467 | 643 | 3.2 |
+| 20 | 0.0038 | 0.444 | 907 | 7.3 |
+| 30 | 0.0036 | 0.438 | 984 | 17.8 |
+| 50 | 0.0045 | 0.451 | 840 | 117.8 |
+
+**Phase 3: dt schedules (T=30)**
+
+| schedule | violation | diversity | HF_noise |
+|----------|-----------|-----------|----------|
+| constant | 0.0038 | 0.439 | 983 |
+| linear_decay | 0.0044 | 0.453 | 816 |
+| cosine_decay | 0.0039 | 0.445 | 896 |
+| **warmup** | **0.0034** | 0.431 | 1165 |
+| warmup_decay | 0.0040 | 0.447 | 1010 |
+
+**Phase 4: σ schedules** — 差异微乎其微（viol 0.0033-0.0035），σ=none 微优。
+
+**关键发现：**
+- **Violation ↔ HF_noise 根本权衡**：更多步/更大步长 → violation 降但 HF_noise 爆炸
+- warmup schedule 在 violation 最优(0.0034)，但 HF_noise=1165（比 real 234 高 5×）
+- **Repair 完全失败**：ham_masked ≈ 0.46 对所有配置，修复=随机猜（50% → 无信息增益）
+- T=50 时 delta_u 爆发到 117.8 → flow 不收敛，步数不是越多越好
+- **结论：dt/T/schedule 是操作层面调优，不解决 HF_noise 结构问题（需要 E2a 全局先验 或 G2 带宽扩展）**
+
 ## 范式契约（已固化）
 
 ```json
@@ -817,7 +858,7 @@ flat_norm 跨三种模式（repair/generation/classification）4 种训练策略
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：E2a 完成 ✅ → 结论 #52-54 已固化 → G1-lite 运行中 → E2b-light 待写
+### 当前执行阶段：G1-lite 完成 ✅ → 结论 #55 已固化 → E2b-combined 运行中 → E2b-light 待跑
 
 ---
 
@@ -1005,7 +1046,9 @@ route_c/
 │   ├── exp_flow_f0c_fixes.py       # F0c: 发散修复+σ schedule（已完成 ✅）
 │   ├── exp_c1_operator_modes.py    # C1: 统一算子三模式兼容性（已完成 ✅）
 │   ├── exp_g2_protocol_density.py  # G2-lite: 协议密度/分层（已完成 ✅）
-│   ├── exp_g1_dt_schedule.py      # G1-lite: dt/T/schedule sweep（运行中）
+│   ├── exp_g1_dt_schedule.py      # G1-lite: dt/T/schedule sweep（已完成 ✅）
+│   ├── exp_e2b_combined.py        # E2b: 24bit + spatial_cov combined（运行中）
+│   ├── exp_e2b_factorized_prior.py # E2b-light: factorized prior start（待跑）
 │   └── exp_e2a_global_prior.py    # E2a: 全局先验能量（已完成 ✅）
 ├── PARADIGM_REPORT.md          # 范式研究报告（文献+benchmark+实验矩阵）
 ├── DESIGN_DOC.md               # 设计文档 v2.1

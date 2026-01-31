@@ -320,8 +320,8 @@ def main():
     # ---- Train shared ADC + E_core + StepFn ----
     print("\n[3] Training shared pipeline...")
     K = 16
-    encoder = Encoder16(in_ch=3, n_bits=K).to(device)
-    decoder = Decoder16(out_ch=3, n_bits=K).to(device)
+    encoder = Encoder16(n_bits=K).to(device)
+    decoder = Decoder16(n_bits=K).to(device)
 
     train_adc(encoder, decoder, x_train.to(device), device, epochs=40)
     z_train = encode_all(encoder, x_train.to(device), device)
