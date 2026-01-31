@@ -106,6 +106,8 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 30 | **带宽有帮助但非主瓶颈** | 32×32×16=51.0% vs 32×32×8=49.5%（spread 仅2.8%） | 协议容量：更多 bits 有增益但需配合更强 encoder |
 | 31 | **ResBlock encoder 提升分类至 51.5%** | flat_resblock=51.5% vs plain_flat=45.1%（+6.4%） | 感受野/深度对协议翻译层很重要 |
 | 32 | **Staging 实现完美 repair 稳定但牺牲精度** | sem gap=0.000, dual gap=0.2% vs flat gap=7.5%；但 clean -6.2% | 准确度-稳定性权衡：结构隔离有效但有代价 |
+| 33 | **G1: 带宽大幅改善生成多样性和一致性** | div 0.201→0.342(+70%), viol 0.381→0.290(-24%), HF_coh接近真实；但HF_noise爆炸(136→1838) | 生成容量：16384 bits 解锁多样性，但32×32 grid引入噪声 |
+| 34 | **G2: 频率带调度采样改善低频结构** | E_gap_low 0.335→0.181(近半), div+12%, HF_noise 136→187(更接近264) | 生成采样：粗到细频率调度有效，DCT空间位置代理足够 |
 
 ## 五大计算范式
 
@@ -583,6 +585,22 @@ Z-D（极端下采样）linear 最高（38.4%）但 conv 不突出 — 语义集
 - z_sem **完美 repair-stable by design** (gap=0.000) — 结构隔离有效
 - 下一步方向：在 flat ResBlock 上做 mixed probe 可同时获得 51.5% clean + 更小 gap
 
+### CIFAR-10 Generation G1+G2: Bandwidth + Freq-Band Sampling (exp_gen_cifar10_g1g2.py)
+
+| config | bits | viol | div | cycle | conn | HF_coh | HF_noi | Eg_L | Eg_M |
+|--------|------|------|-----|-------|------|--------|--------|------|------|
+| A_16x16x8_standard | 2048 | 0.381 | 0.201 | 0.013 | 0.999 | -0.332 | 136 | 0.335 | 0.986 |
+| B_16x16x8_freqband | 2048 | 0.361 | 0.226 | 0.015 | 0.999 | -0.334 | 187 | **0.181** | 0.983 |
+| C_32x32x16_standard | 16384 | **0.290** | **0.342** | 0.028 | 0.960 | **-0.311** | 1838 | 0.241 | 0.942 |
+| D_32x32x16_freqband | 16384 | 0.291 | 0.296 | 0.028 | 0.984 | -0.313 | 1183 | 0.232 | **0.929** |
+| E_32x32x16_freqv2 | 16384 | 0.305 | 0.320 | 0.028 | 0.970 | -0.313 | 1825 | 0.247 | 0.950 |
+| (real) | — | — | — | — | 0.964 | -0.309 | 264 | 0 | 0 |
+
+**G1 (带宽 2048→16384):** violation -24%, diversity +70%, HF_coh 接近真实 (Δ=0.002)。但 HF_noise 爆炸 (136→1838)——32×32 grid 的 1:1 映射缺乏空间抽象，每个 z bit 直接映射到像素导致高频噪声。
+**G2 (频率带调度采样):** E_gap_low 近半 (0.335→0.181)，diversity +12%，HF_noise 136→187 更接近真实。32×32×16 上 conn 从 0.960→0.984 改善。
+**G2v2 (decoder-feedback):** 无明显优势，空间频率代理已足够。
+**权衡：** 32×32×16 赢 diversity/violation/HF_coh，但 HF_noise 灾难性——需要更深的 decoder 或 stride-2 架构而非 1:1。
+
 ## 范式契约（已固化）
 
 ```json
@@ -611,7 +629,7 @@ Z-D（极端下采样）linear 最高（38.4%）但 conv 不突出 — 语义集
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：CIFAR-10 分类线 C1+C2 完成 ✅ → 结论 #30-32 已固化 → 准备进入生成线改进
+### 当前执行阶段：G1+G2 生成线完成 ✅ → 结论 #33-34 已固化 → 准备进入 G3 (regression denoiser) 或更深decoder测试
 
 ---
 
@@ -790,7 +808,8 @@ route_c/
 │   ├── exp_cifar10_classify_v2.py     # CIFAR-10 分类 Probe v2 语义稳定性（已完成 ✅）
 │   ├── exp_cifar10_classify_v3.py     # CIFAR-10 分类 v3 双总线+对比（部分完成）
 │   ├── exp_cifar10_bandwidth.py       # C1: 带宽扫描 4 configs（已完成 ✅）
-│   └── exp_cifar10_staged_encoder.py  # C2: Staged ResBlock + VICReg（已完成 ✅）
+│   ├── exp_cifar10_staged_encoder.py  # C2: Staged ResBlock + VICReg（已完成 ✅）
+│   └── exp_gen_cifar10_g1g2.py       # G1+G2: 带宽升级 + 频率带调度采样（已完成 ✅）
 ├── PARADIGM_REPORT.md          # 范式研究报告（文献+benchmark+实验矩阵）
 ├── DESIGN_DOC.md               # 设计文档 v2.1
 └── CLAUDE.md                   # 本文件
