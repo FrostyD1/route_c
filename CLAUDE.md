@@ -135,6 +135,7 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 59 | **层级 z 分离：z_sem 完全 repair-stable** | z_sem gap=0.000, z_tex gap=0.049; dual gap=0.013 | 语义层天然稳定，纹理层承载 repair 风险 |
 | 60 | **Contrastive 对 z_sem 有效（+2.7%）但低于 z_tex 天花板** | sem_only 37.3%, tex_only 47.9%, dual_contra 42.6% | z_tex 空间场仍是主要信息载体 |
 | 61 | **层级结构不提升分类精度（+0.3%）** | hier_tex_only 47.9% vs flat 47.6%, 几乎无差 | 当前 ADC 瓶颈下层级不增加信息量 |
+| 62 | **Mixture start 突破 HueVar 屏障** | K8 HueVar=0.026(real=0.020), 首次接近真实; marginal_start 有害(div 坍塌) | 多模态起始点打破色调均匀性 |
 
 ## 五大计算范式
 
@@ -871,6 +872,39 @@ flat_norm 跨三种模式（repair/generation/classification）4 种训练策略
 - **高 λ 灾难性**：λ=1.0 HF_noise 暴涨到 514，λ=3.0 div 坍塌到 0.15，ColorKL 爆到 21
 - **HueVar 仍未解决**：所有配置 HueVar<0.003（real=0.019），空间协方差先验不够——需要更强的非齐次机制（可能需要 per-pixel 或 multi-scale prior）
 - **Diversity-prior 权衡**：spatial_cov 降低 div（0.44→0.35），先验约束自由度
+
+### E2b-light: Factorized Prior Start (exp_e2b_factorized_prior.py) ✅
+
+| Config | HueVar(real=0.020) | div | HF_noise(real=254) | margKL | z_MMD | conn |
+|--------|-------|-----|---------|--------|-------|------|
+| gaussian_start | 0.001 | **0.452** | 732 | **0.035** | **0.004** | 0.998 |
+| marginal_start | 0.000 | 0.228 | 986 | 0.337 | 0.074 | 0.998 |
+| **mixture_K8** | **0.026** | 0.305 | 933 | 0.138 | 0.058 | 0.941 |
+| **mixture_K16** | **0.025** | 0.311 | 817 | 0.140 | 0.056 | 0.899 |
+| gaussian+cov | 0.001 | 0.449 | 724 | 0.036 | 0.004 | 0.998 |
+| marginal+cov | 0.000 | 0.227 | 987 | 0.347 | 0.077 | 0.997 |
+| mixture_K8+cov | 0.022 | 0.300 | 911 | 0.152 | 0.056 | 0.935 |
+
+- **Mixture start 突破 HueVar**：K8=0.026（超过 real 0.020！），K16=0.025，首次解决色调均匀性
+- **Marginal start 有害**：div 0.452→0.228（坍塌 50%），推向均值 = 更齐次
+- **Spatial_cov 对 mixture 无增益**：K8+cov 0.022 vs K8 0.026，加 cov 反而略降 HueVar
+- **Trade-off**：mixture 修 HueVar 但 diversity 降 30%，HF_noise 仍 3-4× real
+
+### CIFAR-10 Classification v3: Hierarchical + Contrastive (exp_cifar10_classify_v3.py) ✅
+
+| Config | Clean | Repair | Gap |
+|--------|-------|--------|-----|
+| flat_baseline | 0.476 | 0.417 | 0.059 |
+| hier_sem_only | 0.346 | 0.346 | **0.000** |
+| hier_tex_only | **0.479** | 0.430 | 0.049 |
+| hier_dual | 0.388 | 0.401 | **0.013** |
+| contra_sem_only | 0.373 | 0.373 | **0.000** |
+| contra_dual | 0.426 | 0.418 | **0.008** |
+
+- **z_sem 完美 repair-stable**：gap=0.000，语义层天然不被 repair 影响
+- **Contrastive 提升 z_sem**：34.6%→37.3%（+2.7%），无标签对比学习有效
+- **Dual_contra gap 仅 0.008**：层级+对比 = 近乎 repair-proof 分类器
+- **层级不提升天花板**：tex_only 47.9% ≈ flat 47.6%，信息量瓶颈在 ADC
 
 ## 范式契约（已固化）
 
