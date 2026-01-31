@@ -99,6 +99,8 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 23 | **INT4 协议可闭环迭代** | z_cycle=1.85%, drift5=3.07%, agree=95.8% | 范式核心：可读写计算总线 |
 | 24 | **时序动力学成立** | 1-step/5-step MSE 赢 baseline, E_dyn gap=0.31 | 范式扩展：离散核心可做时间演化 |
 | 25 | **去噪编译生成最优** | violation 0.178（最低），cycle 0.012（最低） | 范式生成：sleep-phase 编译可做无条件采样 |
+| 26 | **频率证据改善生成连贯性** | conn 0.335→0.997, HF_coh 接近真实, Gate PASS | 观测几何升级：频率是证据通道不是 task loss |
+| 27 | **CIFAR-10 彩色生成可行** | freq_full_ms HF_noise 最接近真实(295 vs 264) | 范式可扩展到 RGB，离散核通用 |
 
 ## 五大计算范式
 
@@ -488,6 +490,19 @@ freq_full_ms: diversity 超 baseline(0.273>0.260)，低频 energy gap 最小(0.0
 
 Denoise compilation 在 CIFAR-10 上也赢（violation 最低），freq 训练进一步改善，但 diversity 仍有坍塌风险。
 
+### CIFAR-10 A2: Structured HF Generation (exp_gen_cifar10_a2.py)
+
+| config | violation | diversity | HF_noise(real=264) | HF_coh(real=-0.309) | freq |
+|--------|-----------|-----------|---------------------|---------------------|------|
+| baseline | 0.308 | 0.205 | 209 | -0.333 | — |
+| freq_amp | **0.261** | 0.150 | 125 | -0.333 | MIXED |
+| freq_full | 0.279 | **0.225** | 203 | **-0.331** | MIXED |
+| **freq_full_ms** | 0.316 | 0.213 | **295** | -0.331 | **BETTER** |
+
+**freq_full_ms 是唯一 "BETTER" 频率评价的配置。** HF_noise=295（最接近真实 264），低频 gap 最小。
+freq_full 给出最高 diversity(0.225)。Gate 全 PASS。
+mid/high energy gap 仍 >0.93——16×16×8 对 RGB 的表达容量瓶颈。
+
 ## 范式契约（已固化）
 
 ```json
@@ -516,7 +531,7 @@ Denoise compilation 在 CIFAR-10 上也赢（violation 最低），freq 训练�
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：生成实验 A2(structured HF) FMNIST 完成 ✅ → CIFAR-10 freq_full 配置验证中
+### 当前执行阶段：Freq-as-Evidence A2 全完成 ✅ (FMNIST + CIFAR-10) → 结论 #26-27 已固化
 
 ---
 
