@@ -1,0 +1,278 @@
+{
+  "16bit_none": {
+    "n_bits": 16,
+    "prior_type": "none",
+    "lambda": 0.0,
+    "repair": {
+      "center": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.40937501192092896,
+        "kl_marg": 0.00942705012857914,
+        "delta_cov": 0.11720737814903259
+      },
+      "stripes": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.27653807401657104,
+        "kl_marg": 0.022883910685777664,
+        "delta_cov": 0.23415735363960266
+      },
+      "multi_hole": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.22404833137989044,
+        "kl_marg": 0.002354811877012253,
+        "delta_cov": 0.12314311414957047
+      }
+    },
+    "probe_clean": 0.42,
+    "probe_repair": 0.386,
+    "probe_gap": 0.033999999999999975,
+    "gen": {
+      "violation": 0.005305175669491291,
+      "diversity": 0.45492919921875,
+      "cycle": 0.05104980245232582,
+      "connectedness": 0.8711468379257135,
+      "hf_coherence": -0.3119947612285614,
+      "hf_noise_index": 734.583800797752,
+      "energy_gap_low": 0.22728544569381734,
+      "energy_gap_mid": 1.3809090750229844,
+      "energy_gap_high": 0.21469518804896737,
+      "energy_mono_rate": 1.0,
+      "e_core_start": 0.11993633583188057,
+      "e_core_end": 0.03344421414658427,
+      "e_core_drop": 0.0864921216852963,
+      "converge_step": 15,
+      "hue_var": 0.0008793224697001278,
+      "color_kl": 1.1589497725168865
+    }
+  },
+  "16bit_pos_marg": {
+    "n_bits": 16,
+    "prior_type": "pos_marg",
+    "lambda": 0.3,
+    "repair": {
+      "center": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.43576952815055847,
+        "kl_marg": 0.019890032708644867,
+        "delta_cov": 0.1574699431657791
+      },
+      "stripes": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.2990790903568268,
+        "kl_marg": 0.009762352332472801,
+        "delta_cov": 0.3482429087162018
+      },
+      "multi_hole": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.23797421157360077,
+        "kl_marg": 0.001167531474493444,
+        "delta_cov": 0.1661955714225769
+      }
+    },
+    "probe_clean": 0.422,
+    "probe_repair": 0.382,
+    "probe_gap": 0.03999999999999998,
+    "gen": {
+      "violation": 0.004868163727223873,
+      "diversity": 0.4641259765625,
+      "cycle": 0.06293701380491257,
+      "connectedness": 0.9876530471979315,
+      "hf_coherence": -0.3051553964614868,
+      "hf_noise_index": 576.01159115103,
+      "energy_gap_low": 0.36689684748856927,
+      "energy_gap_mid": 1.606220234081389,
+      "energy_gap_high": 0.2961686591951402,
+      "energy_mono_rate": 1.0,
+      "e_core_start": 0.1335627306252718,
+      "e_core_end": 0.03193523455411196,
+      "e_core_drop": 0.10162749607115984,
+      "converge_step": 15,
+      "hue_var": 0.0019467748934403062,
+      "color_kl": 1.0072455803553264
+    }
+  },
+  "16bit_spatial_cov": {
+    "n_bits": 16,
+    "prior_type": "spatial_cov",
+    "lambda": 0.3,
+    "repair": {
+      "center": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.4510253965854645,
+        "kl_marg": 0.016639886423945427,
+        "delta_cov": 0.20187987387180328
+      },
+      "stripes": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.29496583342552185,
+        "kl_marg": 0.01228357758373022,
+        "delta_cov": 0.3614621162414551
+      },
+      "multi_hole": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.22728823125362396,
+        "kl_marg": 0.0009379138937219977,
+        "delta_cov": 0.15793418884277344
+      }
+    },
+    "probe_clean": 0.416,
+    "probe_repair": 0.37,
+    "probe_gap": 0.045999999999999985,
+    "gen": {
+      "violation": 0.0059350584633648396,
+      "diversity": 0.47680615234375,
+      "cycle": 0.06651122868061066,
+      "connectedness": 0.9668806314389202,
+      "hf_coherence": -0.31478968262672424,
+      "hf_noise_index": 456.88390325146713,
+      "energy_gap_low": 0.3996060299568282,
+      "energy_gap_mid": 2.7309394456798874,
+      "energy_gap_high": 1.1726610909208433,
+      "energy_mono_rate": 1.0,
+      "e_core_start": 0.14382291957736015,
+      "e_core_end": 0.03403864847496152,
+      "e_core_drop": 0.10978427110239863,
+      "converge_step": 15,
+      "hue_var": 0.0021222999785095453,
+      "color_kl": 0.9885937770207723
+    }
+  },
+  "24bit_none": {
+    "n_bits": 24,
+    "prior_type": "none",
+    "lambda": 0.0,
+    "repair": {
+      "center": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.4489453136920929,
+        "kl_marg": 0.03616539016366005,
+        "delta_cov": 0.3318134844303131
+      },
+      "stripes": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.23119141161441803,
+        "kl_marg": 0.010978431440889835,
+        "delta_cov": 0.4752224385738373
+      },
+      "multi_hole": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.20113810896873474,
+        "kl_marg": 0.0012038906570523977,
+        "delta_cov": 0.24149787425994873
+      }
+    },
+    "probe_clean": 0.42,
+    "probe_repair": 0.4,
+    "probe_gap": 0.019999999999999962,
+    "gen": {
+      "violation": 0.023183593526482582,
+      "diversity": 0.42862337267398837,
+      "cycle": 0.09121907502412796,
+      "connectedness": 0.609519400981423,
+      "hf_coherence": -0.3158794442812602,
+      "hf_noise_index": 259.01290970305286,
+      "energy_gap_low": 0.1273174778427549,
+      "energy_gap_mid": 6.407165806052527,
+      "energy_gap_high": 4.885704838915341,
+      "energy_mono_rate": 1.0,
+      "e_core_start": 0.22946593165397644,
+      "e_core_end": 0.07437642011791468,
+      "e_core_drop": 0.15508951153606176,
+      "converge_step": 15,
+      "hue_var": 0.0018566417274996638,
+      "color_kl": 1.0645477970441182
+    }
+  },
+  "24bit_pos_marg": {
+    "n_bits": 24,
+    "prior_type": "pos_marg",
+    "lambda": 0.3,
+    "repair": {
+      "center": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.4929348826408386,
+        "kl_marg": 0.08168964833021164,
+        "delta_cov": 0.5906292796134949
+      },
+      "stripes": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.2634700536727905,
+        "kl_marg": 0.012008133344352245,
+        "delta_cov": 0.7091714143753052
+      },
+      "multi_hole": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.21792985498905182,
+        "kl_marg": 0.0008142548031173646,
+        "delta_cov": 0.32291245460510254
+      }
+    },
+    "probe_clean": 0.458,
+    "probe_repair": 0.42,
+    "probe_gap": 0.038000000000000034,
+    "gen": {
+      "violation": 0.02137858048081398,
+      "diversity": 0.4379394535422325,
+      "cycle": 0.09122233092784882,
+      "connectedness": 0.884012823371655,
+      "hf_coherence": -0.3143557409445445,
+      "hf_noise_index": 259.84538515431876,
+      "energy_gap_low": 0.22660301705182917,
+      "energy_gap_mid": 6.552434829572559,
+      "energy_gap_high": 5.031420541635817,
+      "energy_mono_rate": 1.0,
+      "e_core_start": 0.2427373994141817,
+      "e_core_end": 0.07093463186174631,
+      "e_core_drop": 0.1718027675524354,
+      "converge_step": 14,
+      "hue_var": 0.002387159736827016,
+      "color_kl": 0.6929935614267985
+    }
+  },
+  "24bit_spatial_cov": {
+    "n_bits": 24,
+    "prior_type": "spatial_cov",
+    "lambda": 0.3,
+    "repair": {
+      "center": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.5071132779121399,
+        "kl_marg": 0.12480846792459488,
+        "delta_cov": 0.7868034839630127
+      },
+      "stripes": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.2674524784088135,
+        "kl_marg": 0.019429491832852364,
+        "delta_cov": 0.6574936509132385
+      },
+      "multi_hole": {
+        "ham_unmasked": 0.0,
+        "ham_masked": 0.2182193547487259,
+        "kl_marg": 0.0010512795997783542,
+        "delta_cov": 0.3220299780368805
+      }
+    },
+    "probe_clean": 0.44,
+    "probe_repair": 0.392,
+    "probe_gap": 0.04799999999999999,
+    "gen": {
+      "violation": 0.023167317733168602,
+      "diversity": 0.37965885472297667,
+      "cycle": 0.12489583343267441,
+      "connectedness": 0.9997251121313991,
+      "hf_coherence": -0.32810396949450177,
+      "hf_noise_index": 196.6387861083264,
+      "energy_gap_low": 1.5558942486318843,
+      "energy_gap_mid": 4.753548828947092,
+      "energy_gap_high": 5.098555253294392,
+      "energy_mono_rate": 0.8571428571428571,
+      "e_core_start": 0.2295803539454937,
+      "e_core_end": 0.07125752791762352,
+      "e_core_drop": 0.15832282602787018,
+      "converge_step": 12,
+      "hue_var": 0.0011636143317446113,
+      "color_kl": 11.939885775248209
+    }
+  }
+}
