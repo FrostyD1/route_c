@@ -150,6 +150,11 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 79 | **ICC1: ControlPort 无损失=无效果** | Fisher 0.041→0.021(反降), 指标与 baseline 无差异 | 架构通路不够，需要 ANOVA 可控性损失驱动分化 |
 | 80 | **ICC1: ANOVA 可控性损失 Fisher 59×** | Fisher 0.041→2.433, dead 1.0→0.865, 但 acc 降, gap 升到 0.050 | C 约束工作但过强：ctrl loss 干扰了 recon quality |
 | 81 | **ICC1: O+C 耦合需要调优** | B(+ent): cycle 0.035→0.180; D(+ctrl_full): cycle→0.150; 全 HARD_FAIL | 熵/可控性改善信息利用率但破坏协议稳定性，λ 需更保守 |
+| 82 | **ICC2: Spectral eq 是最有效的单一干预(+3.8%)** | D-optimal Jacobian: 0.414→0.452, HF_noise 498→242(≈real 264) | 解码器灵敏度均衡化直接改善分类和纹理 |
+| 83 | **ICC2: Aug-inv 单独效果微弱(+1.0%)** | 0.414→0.424, HF_noise 反恶化(790), dead bits 不变 | 不改变解码器灵敏度=不改变信息利用率 |
+| 84 | **ICC2: Spectral+aug 组合不如 spectral 单独** | D(0.430) < B(0.452), 但 dead 最好(0.750), gap 最好(0.036) | aug-inv 干扰 spectral 学习 |
+| 85 | **ICC2: VICReg 恢复组合精度** | E(0.452)=B(0.452), HF_noise=84(过平滑) | VICReg 补偿 aug-inv 干扰 |
+| 86 | **ICC2: Spectral 改善但不解决根本瓶颈** | ICC1最佳0.420→ICC2最佳0.452(+3.2%), 仍远低于60% | 瓶颈转移到训练协议/数据量/encoder容量 |
 
 ## 五大计算范式
 

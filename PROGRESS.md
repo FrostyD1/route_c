@@ -145,6 +145,8 @@ device bug 崩溃，用户决定跳过直接跑 X-CORE。
 - [x] E2b-light: mixture start (#62) — 之前已跑出部分结果
 - [x] **X-CORE: 统一 E_prior** (#63-68) ✅
 - [x] **R0: Routing vs Encoder Capacity** (#69-73) ✅
+- [x] **ICC-2: Spectral Equalization** (#82-86) ✅
+- [ ] ICC-3: ResBlock + Spectral + Scale-up (next)
 - [ ] Git push 所有结果 + 图片
 
 ---
@@ -324,3 +326,35 @@ E_obs 残差信号成功分离 center 和 stripes。
 - **ANOVA ctrl_full(D)**: Fisher 59×突破! 但 acc 降, gap 升, cycle 退化
 - **全部 HARD_FAIL**: cycle 退化(0.035→0.15-0.18)破坏协议稳定性
 - **结论**: O+C 约束方向正确但 λ 过强，需保守调优(λ_ent≤0.1, λ_ctrl≤0.3)
+
+### ICC-2: Spectral Equalization + Augmentation Invariance (#82-86) ✅
+
+| Config | cond | dead% | entropy | acc_clean | gap | div | HF_noise | cycle |
+|--------|------|-------|---------|-----------|-----|-----|----------|-------|
+| ICC2A base | 4.3 | 1.000 | 0.218 | 0.414 | 0.058 | 0.474 | 498 | 0.035 |
+| **ICC2B +spectral** | 12.0 | 0.940 | 0.235 | **0.452** | 0.056 | 0.405 | **242** | 0.073 |
+| ICC2C +auginv | 4.3 | 1.000 | 0.338 | 0.424 | 0.056 | 0.471 | 790 | 0.042 |
+| ICC2D +spec+aug | 56.1 | **0.750** | 0.312 | 0.430 | **0.036** | 0.356 | 618 | 0.061 |
+| **ICC2E +full** | 25.3 | 0.905 | 0.287 | **0.452** | 0.052 | 0.397 | **84** | 0.131 |
+
+**结论 #82: Spectral eq 是最有效的单一干预 (+3.8% acc)**
+- D-optimal decoder Jacobian 正则化: 0.414→0.452
+- HF_noise 从 498→242（接近 real 264），说明解码器灵敏度均衡化直接改善高频纹理
+- 但 diversity 降（0.474→0.405），connectedness 崩溃（0.989→0.429）
+
+**结论 #83: Aug-inv 单独效果微弱 (+1.0%)**
+- 0.414→0.424，HF_noise 反而恶化（498→790）
+- 不改变 dead bits 或 condition number
+
+**结论 #84: Spectral+aug 组合不如 spectral 单独**
+- D: 0.430 < B: 0.452，aug-inv 干扰 spectral 学习
+- 但 dead ratio 最好（0.750），gap 最好（0.036）
+
+**结论 #85: VICReg 恢复 spectral+aug 的精度**
+- E: 0.452 = B: 0.452，VICReg 补偿了 aug-inv 的干扰
+- HF_noise=84（远低于 real=264），过于平滑
+
+**结论 #86: Spectral eq 改善解码器灵敏度但不解决根本瓶颈**
+- 从 ICC1→ICC2 最佳: 0.420→0.452（+3.2%）
+- 仍远低于 60% 目标，瓶颈从 "dead bits" 转移到 "训练协议/数据量"
+- 下一步: 组合 spectral eq + ResBlock encoder + 更多数据
