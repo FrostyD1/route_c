@@ -129,6 +129,9 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 53 | **Marginal prior 有害（推向均值=更齐次）** | div 0.47→0.21, HueVar 0.044→0.010; 匹配均值 ≠ 匹配分布 | 全局先验必须保留方差结构 |
 | 54 | **Channel-only prior 完全无效** | 所有指标 Δ<0.001, 与 baseline 无差异 | 缺的是空间非齐次性，不是通道统计 |
 | 55 | **dt/T/schedule 调优改善 violation 但恶化 HF_noise** | warmup best viol=0.0034, 但 HF_noise=1165(real=234); 更多步/更大步长→更齐次 | 采样超参不解决结构问题 |
+| 56 | **24-bit+spatial_cov_0.3 是组合最优** | HF_noise=204(real=264), ColorKL=0.98(最佳); 两修复互补 | 带宽+先验组合有效 |
+| 57 | **高 λ 先验摧毁生成质量** | λ=1.0: HF_noise=514, ColorKL=10; λ=3.0: div=0.15(坍塌), ColorKL=21 | 先验强度必须极保守（λ≤0.3） |
+| 58 | **HueVar 仍未解决（需更强的非齐次机制）** | 所有E2b配置 HueVar<0.003(real=0.019); spatial_cov 改善 ColorKL 但不改善像素级色调方差 | 当前先验在协方差层面工作，不在像素纹理层面 |
 
 ## 五大计算范式
 
@@ -830,6 +833,24 @@ flat_norm 跨三种模式（repair/generation/classification）4 种训练策略
 - T=50 时 delta_u 爆发到 117.8 → flow 不收敛，步数不是越多越好
 - **结论：dt/T/schedule 是操作层面调优，不解决 HF_noise 结构问题（需要 E2a 全局先验 或 G2 带宽扩展）**
 
+### E2b: Combined Fix — 24-bit Bandwidth + Spatial Cov Prior (exp_e2b_combined.py) ✅
+
+| Config | bits | λ | HF_noise(real=264) | HueVar(real=0.019) | ColorKL | div | conn | cycle |
+|--------|------|---|-----------|---------|---------|-----|------|-------|
+| 16bit_baseline | 16 | 0.0 | 420 | 0.0033 | 0.61 | 0.448 | 0.861 | 0.073 |
+| 16bit_spatial_cov_0.3 | 16 | 0.3 | 643 | 0.0017 | 0.80 | 0.470 | 0.865 | 0.058 |
+| 24bit_baseline | 24 | 0.0 | 381 | 0.0015 | 1.45 | 0.440 | 0.437 | 0.089 |
+| **24bit_spatial_cov_0.3** | **24** | **0.3** | **204** | 0.0023 | **0.98** | 0.353 | 0.508 | 0.142 |
+| 24bit_spatial_cov_1.0 | 24 | 1.0 | 514 | 0.0014 | 10.0 | 0.343 | 0.997 | 0.127 |
+| 24bit_spatial_cov_3.0 | 24 | 3.0 | 705 | 0.0007 | 20.9 | 0.153 | 0.999 | 0.145 |
+
+**核心发现：**
+- **24bit+spatial_cov_0.3 是 Pareto 最优**：HF_noise=204（最接近真实264），ColorKL=0.98（最低）
+- **带宽和先验互补**：24-bit 修 HF_noise（381→204），spatial_cov 修 ColorKL（1.45→0.98）
+- **高 λ 灾难性**：λ=1.0 HF_noise 暴涨到 514，λ=3.0 div 坍塌到 0.15，ColorKL 爆到 21
+- **HueVar 仍未解决**：所有配置 HueVar<0.003（real=0.019），空间协方差先验不够——需要更强的非齐次机制（可能需要 per-pixel 或 multi-scale prior）
+- **Diversity-prior 权衡**：spatial_cov 降低 div（0.44→0.35），先验约束自由度
+
 ## 范式契约（已固化）
 
 ```json
@@ -858,7 +879,7 @@ flat_norm 跨三种模式（repair/generation/classification）4 种训练策略
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：G1-lite 完成 ✅ → 结论 #55 已固化 → E2b-combined 运行中 → E2b-light 待跑
+### 当前执行阶段：E2b 完成 ✅ → 结论 #56-58 已固化 → CIFAR-10 Classification v3 进行中
 
 ---
 
