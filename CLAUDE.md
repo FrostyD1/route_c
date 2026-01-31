@@ -459,6 +459,35 @@ E_dyn 区分真实 vs 打乱序列（gap=0.31）。Energy projection 有正向�
 **Denoising compilation（Route C 范式方法）赢在协议指标：** 最低 violation（0.178），最低 cycle error（0.012）。
 AR 在 violation 上第二。Token categorical 有最佳 token KL（但 violation 高）。
 
+### Generative: Freq-as-Evidence A1→A2 路线 (exp_gen_freq_*.py)
+
+**A1v2（freq-aware denoiser training）FMNIST 结果：**
+- freq_train_03: violation -14%, connectedness=0.862 ≈ 真实(0.863), BEP_d 改善 20%
+- freq_train_03_ms: diversity 0.256（≈baseline 0.258），Gate 全 PASS
+
+**A2（structured HF generation）FMNIST 8-config 结果：**
+
+| config | viol | div | conn | HF_coh | HF_noise |
+|--------|------|-----|------|--------|----------|
+| baseline | 0.146 | 0.260 | 0.966 | -0.324 | 284 |
+| **freq_full** | 0.136 | 0.246 | **0.997** | **-0.319** | 342 |
+| freq_sched_coh_ms | 0.152 | 0.248 | 0.982 | -0.320 | 359 |
+| **freq_full_ms** | 0.142 | **0.273** | 0.835 | -0.336 | 345 |
+
+freq_full: HF coherence 最接近真实，connectedness 0.997，Gate PASS。
+freq_full_ms: diversity 超 baseline(0.273>0.260)，低频 energy gap 最小(0.034)。
+所有配置 HF_noise_index 远高于真实(284-484 vs 113)——离散 z→decoder 管线固有的块状梯度问题。
+
+**CIFAR-10 首轮结果：**
+
+| method | violation | diversity | cycle | conn |
+|--------|-----------|-----------|-------|------|
+| denoise_base | 0.212 | 0.189 | 0.009 | 1.000 |
+| denoise_freq | **0.149** | 0.071 | **0.005** | 1.000 |
+| denoise_freq_ms | 0.229 | **0.184** | 0.016 | 1.000 |
+
+Denoise compilation 在 CIFAR-10 上也赢（violation 最低），freq 训练进一步改善，但 diversity 仍有坍塌风险。
+
 ## 范式契约（已固化）
 
 ```json
@@ -487,7 +516,7 @@ AR 在 violation 上第二。Token categorical 有最佳 token KL（但 violatio
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：Phase 10C-2 PROTOCOL-STABLE ✅ → Phase 13B 时序确认 ✅ → 无条件生成实验进行中
+### 当前执行阶段：生成实验 A2(structured HF) FMNIST 完成 ✅ → CIFAR-10 freq_full 配置验证中
 
 ---
 
