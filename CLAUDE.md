@@ -122,6 +122,9 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 46 | **Evidence clamping 保证零证据泄漏** | 全4种算子 ham_unmasked=0.000, cycle<0.04 | 范式核心：修复合同是架构性保证，非训练依赖 |
 | 47 | **Gen-first 算子通过全部部署门** | Op-B/D: G1 Cost PASS, G2 Contract PASS, G3 ModeSwitch PASS | 范式统一算子：生成训练的算子可直接做修复 |
 | 48 | **Energy-aware 是 Pareto 最优算子** | Op-D: div=0.427(最高), E_gap_H=0.44(最低), 全门PASS; Op-A div=0.03(坍塌) | 能量 hinge + flow 训练 = 统一修复/生成/分类 |
+| 49 | **24-bit 是 HF_noise Pareto 最优** | L1_bits24: HF_noise=231(real=264), div=0.435; L1_bits16=921, L1_bits32=659 | 协议密度：24bit/pos 是信息瓶颈的甜蜜点 |
+| 50 | **INT4 token HF_noise 最低但 cycle 崩溃** | L3_int4_ch4: HF_noise=115, cycle=0.483; binary→INT4 round-trip 不可控 | INT4 出路需确定性量化(参见 Phase 10C-2) |
+| 51 | **残差解码器(L2)多样性坍塌** | L2_main16_res8: div=0.112(坍塌), HF_noise=549; 冻结主路+可训残差不够 | 主+残差分离架构不如平铺 24bit |
 
 ## 五大计算范式
 
@@ -743,6 +746,25 @@ flat_norm 跨三种模式（repair/generation/classification）4 种训练策略
 - **INT4 activation quant 可行**：Op-B/D INT4_div>0.44（甚至高于 FP32 的 0.41-0.43）
 - HF_noise 仍高（883-972 vs real 254）→ G2-lite 需要解决
 
+### G2-lite: Protocol Density / Layering (exp_g2_protocol_density.py) ✅
+
+| Config | bits/pos | total | HF_noise | div | cycle | conn | E_gap_H |
+|--------|---------|-------|----------|-----|-------|------|---------|
+| L1_bits16 (baseline) | 16 | 4096 | 921 | 0.417 | 0.055 | 0.957 | 0.52 |
+| **L1_bits24** | **24** | **6144** | **231** | **0.435** | 0.126 | 0.996 | 5.39 |
+| L1_bits32 | 32 | 8192 | 659 | 0.459 | 0.090 | 0.995 | 0.40 |
+| L2_main16_res8 | 24 | 6144 | 549 | 0.112 | 0.056 | 1.000 | 0.93 |
+| L3_int4_ch4 | 16eq | 4096 | **115** | 0.381 | 0.483 | 0.969 | 14.09 |
+| L3_int4_ch8 | 32eq | 8192 | 122 | 0.345 | 0.464 | 1.000 | 5.69 |
+| **Real** | — | — | **264** | — | — | — | — |
+
+**核心发现：**
+- **24-bit 是 HF_noise Pareto 最优**：HF_noise=231（Δ=-33 from real），div=0.435（良好），cycle=0.126（可接受）
+- **非单调关系**：16→24 bits 大幅改善（921→231），但 32 bits 反而退化（659），因训练/模型容量未同步扩展
+- **INT4 tokens 纹理最佳但协议崩溃**：HF_noise=115-122，但 cycle=0.46-0.48（48% bit flip per round-trip）
+- **残差解码器不如平铺**：L2 diversity 坍塌到 0.112，冻结主路 + 可训残差不够
+- **信息瓶颈确认为 HF_noise 根因**：从 921→231 的 75% 降幅，纯靠增加 bit 深度，不涉及任何先验/噪声调度
+
 ## 范式契约（已固化）
 
 ```json
@@ -771,7 +793,7 @@ flat_norm 跨三种模式（repair/generation/classification）4 种训练策略
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：C1 完成 ✅ → 结论 #46-48 已固化 → G2-lite 运行中（协议密度/分层）
+### 当前执行阶段：G2-lite 完成 ✅ → 结论 #49-51 已固化 → E2a 全局先验实验中
 
 ---
 
@@ -958,7 +980,9 @@ route_c/
 │   ├── exp_flow_f0b_tsweep.py       # F0b: T-sweep 收敛步数（已完成 ✅）
 │   ├── exp_flow_f0c_fixes.py       # F0c: 发散修复+σ schedule（已完成 ✅）
 │   ├── exp_c1_operator_modes.py    # C1: 统一算子三模式兼容性（已完成 ✅）
-│   └── exp_g2_protocol_density.py  # G2-lite: 协议密度/分层（运行中）
+│   ├── exp_g2_protocol_density.py  # G2-lite: 协议密度/分层（已完成 ✅）
+│   ├── exp_g1_dt_schedule.py      # G1-lite: dt/T/schedule sweep（待运行）
+│   └── exp_e2a_global_prior.py    # E2a: 全局先验能量（进行中）
 ├── PARADIGM_REPORT.md          # 范式研究报告（文献+benchmark+实验矩阵）
 ├── DESIGN_DOC.md               # 设计文档 v2.1
 └── CLAUDE.md                   # 本文件
