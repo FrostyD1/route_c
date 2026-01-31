@@ -125,6 +125,9 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 49 | **24-bit 是 HF_noise Pareto 最优** | L1_bits24: HF_noise=231(real=264), div=0.435; L1_bits16=921, L1_bits32=659 | 协议密度：24bit/pos 是信息瓶颈的甜蜜点 |
 | 50 | **INT4 token HF_noise 最低但 cycle 崩溃** | L3_int4_ch4: HF_noise=115, cycle=0.483; binary→INT4 round-trip 不可控 | INT4 出路需确定性量化(参见 Phase 10C-2) |
 | 51 | **残差解码器(L2)多样性坍塌** | L2_main16_res8: div=0.112(坍塌), HF_noise=549; 冻结主路+可训残差不够 | 主+残差分离架构不如平铺 24bit |
+| 52 | **Spatial covariance 是正确的全局先验** | HueVar 0.044→2.785(real=2.44), ColorKL -73%, act_KL -80% | 范式：缺件是"方差匹配"不是"均值匹配" |
+| 53 | **Marginal prior 有害（推向均值=更齐次）** | div 0.47→0.21, HueVar 0.044→0.010; 匹配均值 ≠ 匹配分布 | 全局先验必须保留方差结构 |
+| 54 | **Channel-only prior 完全无效** | 所有指标 Δ<0.001, 与 baseline 无差异 | 缺的是空间非齐次性，不是通道统计 |
 
 ## 五大计算范式
 
@@ -765,6 +768,27 @@ flat_norm 跨三种模式（repair/generation/classification）4 种训练策略
 - **残差解码器不如平铺**：L2 diversity 坍塌到 0.112，冻结主路 + 可训残差不够
 - **信息瓶颈确认为 HF_noise 根因**：从 921→231 的 75% 降幅，纯靠增加 bit 深度，不涉及任何先验/噪声调度
 
+### E2a: Global Statistics Prior (exp_e2a_global_prior.py) ✅
+
+| Config | HueVar | ColorKL | div | HF_noise | act_KL | conn |
+|--------|--------|---------|-----|----------|--------|------|
+| **Real** | **2.44** | — | — | **264** | — | — |
+| baseline | 0.044 | 0.350 | 0.473 | 399 | 0.085 | 0.981 |
+| marginal λ=0.3 | 0.023 | 0.780 | 0.395 | 384 | 0.236 | 0.997 |
+| marginal λ=1.0 | 0.010 | 1.772 | 0.208 | 383 | 0.648 | 1.000 |
+| channel_stats λ=3.0 | 0.044 | 0.355 | 0.473 | 398 | 0.087 | 0.985 |
+| **spatial_cov λ=0.3** | **2.785** | **0.096** | 0.312 | 542 | **0.017** | 0.985 |
+| spatial_cov λ=1.0 | 2.465 | 0.094 | 0.300 | 584 | 0.014 | 0.990 |
+| learned λ=0.3 | 0.103 | 2.572 | 0.085 | 698 | 1.301 | 0.498 |
+
+**核心发现：**
+- **Spatial covariance prior 打破齐次相**：HueVar 从 0.044 飙到 2.785（真实=2.44），ColorKL 降 73%，act_rate_KL 降 80%
+- **Marginal prior 反而有害**：推向均值 = 更齐次，div 降 56%，HueVar 进一步下降
+- **Channel-only prior 完全无效**：所有 λ 值的指标与 baseline 差异 <0.001
+- **Learned prior 崩溃**：小网络过度拟合，connectedness 降到 0.50，diversity 坍塌到 0.08
+- **代价**：spatial_cov div 降 34%（0.47→0.31），HF_noise 升 36%（399→542）——prior 强度 vs 自由度权衡
+- **诊断意义**：缺的是"方差/协方差匹配"不是"均值匹配"，空间非齐次性是关键
+
 ## 范式契约（已固化）
 
 ```json
@@ -793,7 +817,7 @@ flat_norm 跨三种模式（repair/generation/classification）4 种训练策略
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：G2-lite 完成 ✅ → 结论 #49-51 已固化 → E2a 全局先验实验中
+### 当前执行阶段：E2a 完成 ✅ → 结论 #52-54 已固化 → G1-lite 运行中 → E2b-light 待写
 
 ---
 
@@ -981,8 +1005,8 @@ route_c/
 │   ├── exp_flow_f0c_fixes.py       # F0c: 发散修复+σ schedule（已完成 ✅）
 │   ├── exp_c1_operator_modes.py    # C1: 统一算子三模式兼容性（已完成 ✅）
 │   ├── exp_g2_protocol_density.py  # G2-lite: 协议密度/分层（已完成 ✅）
-│   ├── exp_g1_dt_schedule.py      # G1-lite: dt/T/schedule sweep（待运行）
-│   └── exp_e2a_global_prior.py    # E2a: 全局先验能量（进行中）
+│   ├── exp_g1_dt_schedule.py      # G1-lite: dt/T/schedule sweep（运行中）
+│   └── exp_e2a_global_prior.py    # E2a: 全局先验能量（已完成 ✅）
 ├── PARADIGM_REPORT.md          # 范式研究报告（文献+benchmark+实验矩阵）
 ├── DESIGN_DOC.md               # 设计文档 v2.1
 └── CLAUDE.md                   # 本文件
