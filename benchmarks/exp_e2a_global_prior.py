@@ -295,8 +295,8 @@ def compute_z_mmd(z_gen, z_data, n_samples=500):
     Uses Hamming kernel: k(z_i, z_j) = exp(-hamming(z_i,z_j) / bandwidth)
     """
     n = min(n_samples, len(z_gen), len(z_data))
-    zg = z_gen[:n].float().view(n, -1)  # [n, D]
-    zd = z_data[:n].float().view(n, -1)  # [n, D]
+    zg = z_gen[:n].cpu().float().view(n, -1)  # [n, D]
+    zd = z_data[:n].cpu().float().view(n, -1)  # [n, D]
     D = zg.shape[1]
     bandwidth = D * 0.1  # 10% of dimension
 

@@ -900,7 +900,7 @@ flat_norm 跨三种模式（repair/generation/classification）4 种训练策略
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：v3 Classify 完成 ✅ → 结论 #59-61 已固化 → E2b-light 运行中
+### 当前执行阶段：E2b-light 重跑中（device fix） → X-CORE 脚本已写好待跑 → 全部完成后 git push
 
 ---
 
