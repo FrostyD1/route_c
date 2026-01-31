@@ -110,6 +110,10 @@ E_core 架构、InpaintNet 架构、推断协议、训练协议（sleep-phase ma
 | 34 | **G2: 频率带调度采样改善低频结构** | E_gap_low 0.335→0.181(近半), div+12%, HF_noise 136→187(更接近264) | 生成采样：粗到细频率调度有效，DCT空间位置代理足够 |
 | 35 | **G3: 16×16×16 stride-2 最优生成z规格** | E_gap_low=0.109(最低), HF_noise=187(可控), viol=0.322 | stride-2空间抽象+高channel = 最佳平衡，1:1 mapping (32×32) 不可取 |
 | 36 | **Regression denoiser 赢 HF_noise** | HF_noise=297(最接近真实264), div=0.304(最高), viol=0.301(最低) | 连续残差预测比二值分类更适合生成,但仍无细腻纹理 |
+| 37 | **G4: U-Net one-shot 改善结构但非纹理** | div +63%(0.144→0.236), E_gap_L 近半(0.250→0.136), MaskGIT div 3×(0.470) HF_coh≈真实(-0.305) | 架构深度改善结构,MaskGIT改善多样性,但HF_noise仍高 |
+| 38 | **F0: Flow operator 是范式级突破** | flat flow div 3.8×(0.118→0.448), HF_coh≈真实(-0.311); 能量100%单调下降; 首次出现类漫画细节 | 范式核心：迭代下降算子 > one-shot 预测器 |
+| 39 | **能量 hinge 训练改善频率分布** | D1: E_gap_L=0.087(最低), E_gap_H=0.236(C的一半), viol/cycle最低 | E_core参与训练 > 推理时projection(D2≈C) |
+| 40 | **T=10 对 U-Net 不够** | U-Net converge_step=10/10(刚好用完), flat=6/10(有余量); U-Net 视觉反而比 flat 杂乱 | 需要 T=20-50 让 U-Net 充分收敛 |
 
 ## 五大计算范式
 
@@ -603,6 +607,37 @@ Z-D（极端下采样）linear 最高（38.4%）但 conv 不突出 — 语义集
 **G2v2 (decoder-feedback):** 无明显优势，空间频率代理已足够。
 **权衡：** 32×32×16 赢 diversity/violation/HF_coh，但 HF_noise 灾难性——需要更深的 decoder 或 stride-2 架构而非 1:1。
 
+### G4: Energy-Guided U-Net Denoiser (exp_gen_cifar10_g4_energy_unet.py) — 部分完成
+
+| config | viol | div | cycle | HF_coh(real=-0.309) | HF_noi(real=264) | E_gap_L |
+|--------|------|-----|-------|--------|--------|---------|
+| A flat_standard | 0.0001 | 0.144 | 0.022 | -0.330 | 180 | 0.250 |
+| B unet_standard | 0.0009 | 0.236 | 0.011 | -0.330 | 171 | 0.136 |
+| C unet_maskgit | 0.018 | **0.470** | 0.111 | **-0.305** | 529 | 0.252 |
+
+U-Net diversity +63%, E_gap_L 近半。MaskGIT diversity 3×, HF_coh 几乎完美匹配真实。
+但 MaskGIT 破坏协议稳定性(cycle 0.011→0.111)。(D/E/F 未完成即转入 F0)
+
+### Flow F0: Unified Descent Operator (exp_flow_f0.py) ✅
+
+**核心公式：** u_{t+1} = u_t + Δt · f_φ(u_t, ∇E_core(u_t), t) + σ(t)·ε
+
+| config | params | viol | div | cycle | HF_coh | HF_noi | E_gap_L | E_gap_H | mono | converge |
+|--------|--------|------|-----|-------|--------|--------|---------|---------|------|----------|
+| A flat_oneshot | 93K | 0.000 | 0.118 | 0.007 | -0.332 | 151 | 0.076 | 0.959 | — | — |
+| B flat_flow_T10 | 102K | 0.008 | 0.448 | 0.062 | -0.311 | 398 | 0.235 | 0.881 | 1.00 | 6 |
+| C unet_flow_T10 | 1.9M | 0.008 | 0.475 | 0.057 | **-0.309** | 551 | 0.155 | 0.475 | 1.00 | 10 |
+| **D1 unet+energy** | 1.9M | **0.007** | **0.476** | **0.054** | **-0.307** | 612 | **0.087** | **0.236** | 1.00 | 10 |
+| D2 unet+proj | 1.9M | 0.008 | 0.474 | 0.056 | -0.309 | 552 | 0.159 | 0.472 | 1.00 | 10 |
+
+**核心发现：**
+- **Flow > one-shot**: 同一 flat 网络，iterative flow 的 diversity 3.8×(0.118→0.448)，首次出现有意义细节
+- **能量100%单调下降**: 所有 flow config mono_rate=1.0，验证"下降算子"假设
+- **Energy hinge (D1) 最优**: E_gap_L=0.087(最低), E_gap_H=0.236(C的一半), violation/cycle最低
+- **Inference projection (D2) 无效**: D2≈C，说明 E_core 必须在训练时参与
+- **T=10 对 U-Net 不够**: converge_step=10/10(刚好用完), flat=6/10(有余量)
+- **HF_noise 仍高(612)**: 频率*分布*更接近真实(E_gap_H↓)，但像素级高频仍不够有序
+
 ## 范式契约（已固化）
 
 ```json
@@ -631,7 +666,7 @@ Z-D（极端下采样）linear 最高（38.4%）但 conv 不突出 — 语义集
 - ~~Scale to 14×14~~：✅ +39% Δacc，GDA gap=0%（Hopfield 假说未确认）
 - ~~Evidence-strength repair~~：✅ E_obs 残差 total=+13~22%，远超 E_core 一致性 (+0.0%)
 
-### 当前执行阶段：G1+G2 生成线完成 ✅ → 结论 #33-34 已固化 → 准备进入 G3 (regression denoiser) 或更深decoder测试
+### 当前执行阶段：F0 Flow Operator 完成 ✅ → 结论 #37-40 已固化 → 下一步: F0b T-sweep (T=20/30/50) 验证 U-Net 充分收敛后是否消除 HF_noise
 
 ---
 
@@ -811,7 +846,10 @@ route_c/
 │   ├── exp_cifar10_classify_v3.py     # CIFAR-10 分类 v3 双总线+对比（部分完成）
 │   ├── exp_cifar10_bandwidth.py       # C1: 带宽扫描 4 configs（已完成 ✅）
 │   ├── exp_cifar10_staged_encoder.py  # C2: Staged ResBlock + VICReg（已完成 ✅）
-│   └── exp_gen_cifar10_g1g2.py       # G1+G2: 带宽升级 + 频率带调度采样（已完成 ✅）
+│   ├── exp_gen_cifar10_g1g2.py       # G1+G2: 带宽升级 + 频率带调度采样（已完成 ✅）
+│   ├── exp_gen_cifar10_g3.py        # G3: 16×16×16 stride-2 + regression denoiser（已完成 ✅）
+│   ├── exp_gen_cifar10_g4_energy_unet.py # G4: U-Net + E_core + MaskGIT（部分完成）
+│   └── exp_flow_f0.py               # F0: 统一下降算子 flow（已完成 ✅）
 ├── PARADIGM_REPORT.md          # 范式研究报告（文献+benchmark+实验矩阵）
 ├── DESIGN_DOC.md               # 设计文档 v2.1
 └── CLAUDE.md                   # 本文件
